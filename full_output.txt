@@ -1,0 +1,120 @@
+RUNNING FILE: /Users/dhruvjain/quant_project/lesson1_spy_returns.py
+RUNNING...
+
+=== MULTI-TICKER CHECK ===
+Columns in prices: ['GLD', 'IWM', 'QQQ', 'SPY', 'TLT']
+Prices shape: (6569, 5)
+Ticker      GLD  IWM        QQQ        SPY  TLT
+Date                                           
+2000-01-03  NaN  NaN  80.028183  91.617104  NaN
+2000-01-04  NaN  NaN  74.538147  88.034233  NaN
+2000-01-05  NaN  NaN  72.637726  88.191765  NaN
+2000-01-06  NaN  NaN  67.649185  86.774384  NaN
+2000-01-07  NaN  NaN  76.016235  91.813927  NaN
+=== END MULTI-TICKER CHECK ===
+
+Monthly returns preview:
+Ticker      GLD  IWM       QQQ       SPY  TLT
+Date                                         
+2000-01-31  NaN  NaN       NaN       NaN  NaN
+2000-02-29  NaN  NaN  0.190244 -0.015226  NaN
+2000-03-31  NaN  NaN  0.025761  0.096914  NaN
+2000-04-30  NaN  NaN -0.134703 -0.035120  NaN
+2000-05-31  NaN  NaN -0.122691 -0.015723  NaN 
+
+Feature preview:
+            risk_on_spread  growth_lead  smallcaps_lead  gold_lead  spy_vol_3m
+Date                                                                          
+2000-01-31             NaN          NaN             NaN        NaN         NaN
+2000-02-29             NaN     0.205471             NaN        NaN         NaN
+2000-03-31             NaN    -0.071153             NaN        NaN         NaN
+2000-04-30             NaN    -0.099583             NaN        NaN    0.071186
+2000-05-31             NaN    -0.106968             NaN        NaN    0.071293
+2000-06-30             NaN     0.104378        0.067144        NaN    0.027788
+2000-07-31             NaN    -0.027107       -0.011962        NaN    0.020435
+2000-08-31             NaN     0.070928        0.004311        NaN    0.040630
+2000-09-30             NaN    -0.071829        0.022095        NaN    0.061306
+2000-10-31             NaN    -0.074723       -0.039954        NaN    0.060374 
+
+Dataset shape: (255, 6)
+            risk_on_spread  growth_lead  ...  spy_vol_3m  target
+Date                                     ...                    
+2004-12-31        0.003533     0.000103  ...    0.015837       0
+2005-01-31       -0.058106    -0.040705  ...    0.035234       1
+2005-02-28        0.035625    -0.025717  ...    0.028055       0
+2005-03-31       -0.013747     0.000830  ...    0.023911       0
+2005-04-30       -0.057388    -0.024743  ...    0.022759       1
+2005-05-31        0.000850     0.056398  ...    0.029295       0
+2005-06-30       -0.020134    -0.034761  ...    0.025658       1
+2005-07-31        0.072071     0.037867  ...    0.019706       0
+2005-08-31       -0.044141    -0.005784  ...    0.024961       1
+2005-09-30        0.044156     0.004288  ...    0.024105       0
+
+[10 rows x 6 columns] 
+
+Train shape: (121, 5)
+Test  shape: (134, 5)
+
+=== SIMPLE TEST (time split) ===
+Test accuracy: 0.493
+First 10 predicted probs (SPY up): [0.38946803 0.65859035 0.50954139 0.53656892 0.4859187  0.44467169
+ 0.70896289 0.3660215  0.54805471 0.64927268]
+
+Feature weights (higher pushes prob UP):
+growth_lead       0.126049
+spy_vol_3m        0.074948
+smallcaps_lead   -0.065473
+risk_on_spread   -0.167449
+gold_lead        -0.469620
+dtype: float64
+=== END SIMPLE TEST ===
+
+=== WALK-FORWARD VALIDATION ===
+2014-12-31 -> AUC: 0.393
+2016-12-31 -> AUC: 0.414
+2018-12-31 -> AUC: 0.630
+2020-12-31 -> AUC: 0.486
+2022-12-31 -> AUC: 0.505
+
+Mean AUC: 0.486
+Min  AUC: 0.393
+Max  AUC: 0.63
+=== END WALK-FORWARD ===
+
+
+Using median threshold: 0.578
+
+Proba summary:
+count    120.000000
+mean       0.577198
+std        0.098769
+min        0.296218
+25%        0.521235
+50%        0.578097
+75%        0.647089
+max        0.854330
+dtype: float64
+
+Regime counts (months):
+-1.0    60
+ 1.0    60
+Name: count, dtype: int64
+
+Regime %:
+-1.0    50.0
+ 1.0    50.0
+Name: proportion, dtype: float64
+
+=== BACKTEST RESULTS ===
+Start: 2014-12-31 00:00:00 End: 2024-10-31 00:00:00
+Final $1 (strategy): 2.385
+Final $1 (buy&hold SPY): 3.478
+
+Avg monthly return (strategy): 0.0083
+Avg monthly return (SPY): 0.0115
+Sharpe (strategy): 0.645
+Sharpe (SPY): 0.899
+
+Max drawdown (strategy): -0.243
+Max drawdown (SPY): -0.239
+=== END BACKTEST ===
