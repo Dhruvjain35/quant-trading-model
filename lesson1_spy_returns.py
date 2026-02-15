@@ -1,7 +1,6 @@
 # lesson1_spy_returns.py
-# Multi-asset "market behavior" model + walk-forward probs + SPY/TLT/CASH backtest
-# IMPROVED VERSION: Fixed lookahead bias, added features, ensemble models, transaction costs
-# NOW WITH VISUALIZATIONS! (Compatible version)
+# Multi-asset "market behavior" model + LIVE PREDICTION
+# IMPROVED VERSION: Includes "Future Signal" for the current month
 
 import os
 import warnings
@@ -10,6 +9,7 @@ warnings.filterwarnings("ignore")
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from datetime import datetime
 
 # Set matplotlib backend for compatibility
 import matplotlib
@@ -20,125 +20,129 @@ import seaborn as sns
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import (
-    accuracy_score, roc_auc_score, confusion_matrix, 
-    classification_report, brier_score_loss
-)
+from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix, brier_score_loss
 
-# Set style for better-looking plots
-plt.style.use('default')  # Use default style for compatibility
+# Set style
+plt.style.use('default')
 sns.set_palette("husl")
 
 print("=" * 80)
-print("IMPROVED QUANT STRATEGY - Walk-Forward Validation with Proper Backtesting")
+print("IMPROVED QUANT STRATEGY - With LIVE Future Prediction")
 print("=" * 80)
-print("RUNNING FILE:", os.path.abspath(__file__))
 
 # =============================================================================
-# 0) DOWNLOAD MULTI-ASSET PRICES
+# 0) DOWNLOAD LIVE DATA (Forces fresh download)
 # =============================================================================
-print("\n[1/8] Downloading price data...")
+print("\n[1/9] Downloading LIVE price data...")
 
 tickers = ["SPY", "QQQ", "IWM", "TLT", "GLD"]
 
+# Download until TODAY
 prices = yf.download(
     tickers,
     start="2000-01-01",
+    end=datetime.now().strftime('%Y-%m-%d'), # Forces fetch up to today
     auto_adjust=True,
     progress=False
 )["Close"]
 
-print(f"✓ Downloaded {len(prices)} days of data for {len(tickers)} tickers")
-print(f"  Date range: {prices.index.min().date()} to {prices.index.max().date()}")
+# Handle cases where yfinance returns MultiIndex columns
+if isinstance(prices.columns, pd.MultiIndex):
+    prices.columns = prices.columns.get_level_values(0)
+
+print(f"✓ Downloaded {len(prices)} days of data")
+print(f"  Range: {prices.index.min().date()} to {prices.index.max().date()}")
 
 # =============================================================================
-# 1) RESAMPLE TO MONTHLY & CALCULATE RETURNS
+# 1) RESAMPLE TO MONTHLY
 # =============================================================================
-print("\n[2/8] Resampling to monthly frequency...")
+print("\n[2/9] Resampling to monthly frequency...")
 
+# 'ME' is Month End. We use last price of the month.
 monthly_prices = prices.resample("ME").last()
 monthly_rets = monthly_prices.pct_change()
 
-print(f"✓ Monthly data: {len(monthly_rets)} months")
+# DROP the very last row if it's the current unfinished month? 
+# Actually, for "Live Prediction", we need the current unfinished month's prices
+# to predict the NEXT month. So we keep it.
+
+print(f"✓ Monthly data points: {len(monthly_rets)}")
 
 # =============================================================================
-# 2) ENGINEER FEATURES - EXPANDED SET
+# 2) ENGINEER FEATURES
 # =============================================================================
-print("\n[3/8] Engineering features...")
+print("\n[3/9] Engineering features...")
 
 features = pd.DataFrame(index=monthly_rets.index)
 
-# --- Original spread features (market behavior) ---
+# --- Market Behavior ---
 features["risk_on_spread"] = monthly_rets["SPY"] - monthly_rets["TLT"]
 features["growth_lead"] = monthly_rets["QQQ"] - monthly_rets["SPY"]
 features["smallcaps_lead"] = monthly_rets["IWM"] - monthly_rets["SPY"]
 features["gold_lead"] = monthly_rets["GLD"] - monthly_rets["SPY"]
 
-# --- Momentum features (trailing returns) ---
+# --- Momentum ---
 features["spy_mom_3m"] = monthly_prices["SPY"].pct_change(3)
 features["tlt_mom_3m"] = monthly_prices["TLT"].pct_change(3)
 features["gld_mom_3m"] = monthly_prices["GLD"].pct_change(3)
 features["spy_mom_6m"] = monthly_prices["SPY"].pct_change(6)
-features["tlt_mom_6m"] = monthly_prices["TLT"].pct_change(6)
 features["spy_mom_12m"] = monthly_prices["SPY"].pct_change(12)
 
-# --- Volatility features ---
+# --- Volatility ---
 features["spy_vol_3m"] = monthly_rets["SPY"].rolling(3).std()
-features["spy_vol_6m"] = monthly_rets["SPY"].rolling(6).std()
 features["tlt_vol_3m"] = monthly_rets["TLT"].rolling(3).std()
 features["spy_tlt_vol_ratio"] = features["spy_vol_3m"] / (features["tlt_vol_3m"] + 1e-6)
 
-# --- Trend features ---
+# --- Trend ---
 spy_ma6 = monthly_prices["SPY"].rolling(6).mean()
 features["spy_ma_ratio_6m"] = (monthly_prices["SPY"] / spy_ma6) - 1
-tlt_ma6 = monthly_prices["TLT"].rolling(6).mean()
-features["tlt_ma_ratio_6m"] = (monthly_prices["TLT"] / tlt_ma6) - 1
 
-# --- Relative strength ---
-features["spy_tlt_mom_diff_3m"] = features["spy_mom_3m"] - features["tlt_mom_3m"]
-features["spy_tlt_mom_diff_6m"] = features["spy_mom_6m"] - features["tlt_mom_6m"]
-
-# --- Cross-asset correlation ---
+# --- Correlation ---
 cov_spy_tlt = monthly_rets["SPY"].rolling(12).cov(monthly_rets["TLT"])
 var_tlt = monthly_rets["TLT"].rolling(12).var()
 features["spy_tlt_beta_12m"] = cov_spy_tlt / (var_tlt + 1e-6)
 
-print(f"✓ Created {len(features.columns)} features")
+print(f"✓ Created features. Total rows: {len(features)}")
 
 # =============================================================================
-# 3) DEFINE TARGET
+# 3) SEPARATE "HISTORICAL" from "LIVE"
 # =============================================================================
-print("\n[4/8] Defining target variable...")
+print("\n[4/9] Preparing Datasets...")
 
+# The "Target" is what happens NEXT month.
+# Shift(-1) moves next month's return "back" to this month's row.
 target = (monthly_rets["SPY"].shift(-1) > monthly_rets["TLT"].shift(-1)).astype(int)
+
+# Combine features and target
 data = features.copy()
 data["target"] = target
-data_clean = data.dropna()
 
-print(f"✓ Target created: predict if SPY > TLT next month")
-print(f"  Clean dataset: {len(data_clean)} months")
+# THE FIX: Split the data BEFORE dropping NaNs
+# 1. Historical Data (Backtesting): Rows where we know the outcome (Target is not NaN)
+data_historical = data.dropna()
+
+# 2. Live Data (Prediction): The VERY LAST row. 
+# It has Features (current prices) but Target is NaN (we don't know next month yet)
+latest_features = features.iloc[[-1]] 
+
+print(f"✓ Historical Training Data: {len(data_historical)} months")
+print(f"✓ Live Prediction Data: {latest_features.index[0].date()}")
 
 # =============================================================================
-# 4) WALK-FORWARD VALIDATION
+# 4) WALK-FORWARD VALIDATION (BACKTEST)
 # =============================================================================
-print("\n[5/8] Running walk-forward validation...")
+print("\n[5/9] Running walk-forward validation (The Past)...")
 
 TRAIN_WINDOW = 120
 TEST_WINDOW = 12
 STEP_SIZE = 12
 
-X = data_clean.drop(columns=["target"])
-y = data_clean["target"]
+X = data_historical.drop(columns=["target"])
+y = data_historical["target"]
 
 oos_predictions = []
-window_metrics = []
 
-print(f"\nWalk-forward parameters:")
-print(f"  Train window: {TRAIN_WINDOW} months")
-print(f"  Test window: {TEST_WINDOW} months")
-print(f"  Step size: {STEP_SIZE} months\n")
-
-for i, start_idx in enumerate(range(0, len(X) - TRAIN_WINDOW - TEST_WINDOW + 1, STEP_SIZE)):
+for start_idx in range(0, len(X) - TRAIN_WINDOW - TEST_WINDOW + 1, STEP_SIZE):
     train_end = start_idx + TRAIN_WINDOW
     test_end = train_end + TEST_WINDOW
     
@@ -147,344 +151,140 @@ for i, start_idx in enumerate(range(0, len(X) - TRAIN_WINDOW - TEST_WINDOW + 1, 
     X_test = X.iloc[train_end:test_end]
     y_test = y.iloc[train_end:test_end]
     
-    train_dates = X_train.index
-    test_dates = X_test.index
-    
-    if y_test.nunique() < 2:
-        print(f"Window {i+1}: SKIPPED")
-        continue
+    if y_test.nunique() < 2: continue
     
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    # Train models
-    model_lr = LogisticRegression(C=0.1, penalty="l2", solver="lbfgs", max_iter=2000, random_state=42)
-    model_lr.fit(X_train_scaled, y_train)
-    proba_lr = model_lr.predict_proba(X_test_scaled)[:, 1]
+    # Simple Ensemble
+    m1 = LogisticRegression(C=0.1, random_state=42).fit(X_train_scaled, y_train)
+    m2 = RandomForestClassifier(n_estimators=100, max_depth=4, random_state=42).fit(X_train_scaled, y_train)
     
-    model_rf = RandomForestClassifier(n_estimators=100, max_depth=4, min_samples_leaf=10, random_state=42)
-    model_rf.fit(X_train_scaled, y_train)
-    proba_rf = model_rf.predict_proba(X_test_scaled)[:, 1]
+    p1 = m1.predict_proba(X_test_scaled)[:, 1]
+    p2 = m2.predict_proba(X_test_scaled)[:, 1]
+    p_ensemble = (p1 + p2) / 2
     
-    model_gb = GradientBoostingClassifier(n_estimators=100, max_depth=3, learning_rate=0.05, subsample=0.8, random_state=42)
-    model_gb.fit(X_train_scaled, y_train)
-    proba_gb = model_gb.predict_proba(X_test_scaled)[:, 1]
-    
-    proba_ensemble = (proba_lr + proba_rf + proba_gb) / 3
-    
-    # Calculate thresholds from training data only
-    proba_train_lr = model_lr.predict_proba(X_train_scaled)[:, 1]
-    proba_train_rf = model_rf.predict_proba(X_train_scaled)[:, 1]
-    proba_train_gb = model_gb.predict_proba(X_train_scaled)[:, 1]
-    proba_train_ensemble = (proba_train_lr + proba_train_rf + proba_train_gb) / 3
-    
-    upper_threshold = np.percentile(proba_train_ensemble, 70)
-    lower_threshold = np.percentile(proba_train_ensemble, 30)
-    
-    regime_test = np.zeros(len(proba_ensemble))
-    regime_test[proba_ensemble >= upper_threshold] = 1
-    regime_test[proba_ensemble <= lower_threshold] = -1
-    
-    auc = roc_auc_score(y_test, proba_ensemble)
-    acc = accuracy_score(y_test, (proba_ensemble >= 0.5).astype(int))
-    brier = brier_score_loss(y_test, proba_ensemble)
-    
-    for j, date in enumerate(test_dates):
+    for j, date in enumerate(X_test.index):
         oos_predictions.append({
             'date': date,
             'true_label': y_test.iloc[j],
-            'proba': proba_ensemble[j],
-            'regime': regime_test[j],
-            'upper_threshold': upper_threshold,
-            'lower_threshold': lower_threshold,
-            'window': i + 1
+            'proba': p_ensemble[j],
+            'regime': 1 if p_ensemble[j] >= 0.5 else -1
         })
-    
-    window_metrics.append({
-        'window': i + 1,
-        'train_start': train_dates[0],
-        'train_end': train_dates[-1],
-        'test_start': test_dates[0],
-        'test_end': test_dates[-1],
-        'auc': auc,
-        'accuracy': acc,
-        'brier': brier,
-        'n_test': len(y_test)
-    })
-    
-    print(f"Window {i+1:2d}: {test_dates[0].date()} to {test_dates[-1].date()} | AUC={auc:.3f}")
 
 df_predictions = pd.DataFrame(oos_predictions).set_index('date')
-df_metrics = pd.DataFrame(window_metrics)
-
-print(f"\n✓ Completed {len(df_metrics)} windows")
-print(f"\nMean AUC: {df_metrics['auc'].mean():.3f}")
+print(f"✓ Walk-forward complete. {len(df_predictions)} predictions generated.")
 
 # =============================================================================
-# 5) MODEL EVALUATION
+# 5) CALCULATE RETURNS
 # =============================================================================
-print("\n[6/8] Evaluating model performance...")
+print("\n[6/9] Calculating performance...")
 
-y_true_all = df_predictions['true_label'].values
-proba_all = df_predictions['proba'].values
-pred_all = (proba_all >= 0.5).astype(int)
-
-cm = confusion_matrix(y_true_all, pred_all)
-print("\n--- Confusion Matrix ---")
-print(f"Actual TLT>SPY: {cm[0,0]:6d} correct, {cm[0,1]:6d} wrong")
-print(f"Actual SPY>TLT: {cm[1,0]:6d} wrong, {cm[1,1]:6d} correct")
-
-# =============================================================================
-# 6) BACKTEST WITH TRANSACTION COSTS
-# =============================================================================
-print("\n[7/8] Running backtest...")
-
+# Align dates
 bt_dates = df_predictions.index
 spy_returns = monthly_rets.loc[bt_dates, "SPY"].shift(-1)
 tlt_returns = monthly_rets.loc[bt_dates, "TLT"].shift(-1)
 regimes = df_predictions['regime'].values
 
-TC_BPS = 5
-TC_RATE = TC_BPS / 10000
-
-strategy_returns = pd.Series(0.0, index=bt_dates)
-regime_series = pd.Series(regimes, index=bt_dates)
-
+# Transaction Costs (0.10% per trade)
+TC = 0.001 
+strategy_returns = []
 prev_regime = 0
-n_trades = 0
 
-for i, date in enumerate(bt_dates):
-    current_regime = regimes[i]
-    position_change = (current_regime != prev_regime)
+for i in range(len(bt_dates)):
+    curr = regimes[i]
+    ret = spy_returns.iloc[i] if curr == 1 else tlt_returns.iloc[i]
     
-    if current_regime == 1:
-        base_return = spy_returns.iloc[i]
-    elif current_regime == -1:
-        base_return = tlt_returns.iloc[i]
-    else:
-        base_return = 0.0
-    
-    if position_change and i > 0:
-        tc_cost = TC_RATE * 2
-        strategy_returns.iloc[i] = base_return - tc_cost if not pd.isna(base_return) else -tc_cost
-        n_trades += 1
-    else:
-        strategy_returns.iloc[i] = base_return if not pd.isna(base_return) else 0.0
-    
-    prev_regime = current_regime
-
-buyhold_spy = spy_returns.copy()
-buyhold_tlt = tlt_returns.copy()
+    # Subtract cost if we switched assets
+    if curr != prev_regime and i > 0:
+        ret -= TC
+        
+    strategy_returns.append(ret)
+    prev_regime = curr
 
 bt = pd.DataFrame({
     'strategy': strategy_returns,
-    'spy': buyhold_spy,
-    'tlt': buyhold_tlt,
-    'regime': regime_series
-}).dropna()
+    'spy': spy_returns,
+    'tlt': tlt_returns
+}, index=bt_dates).dropna()
 
+# Cumulative Growth
 bt['strategy_growth'] = (1 + bt['strategy']).cumprod()
 bt['spy_growth'] = (1 + bt['spy']).cumprod()
-bt['tlt_growth'] = (1 + bt['tlt']).cumprod()
 
-def calc_metrics(returns_series):
-    total_return = (1 + returns_series).prod() - 1
-    ann_return = (1 + total_return) ** (12 / len(returns_series)) - 1
-    ann_vol = returns_series.std() * np.sqrt(12)
-    sharpe = (ann_return / ann_vol) if ann_vol > 0 else 0
-    cum_returns = (1 + returns_series).cumprod()
-    running_max = cum_returns.cummax()
-    drawdown = (cum_returns - running_max) / running_max
-    max_dd = drawdown.min()
-    calmar = abs(ann_return / max_dd) if max_dd < 0 else 0
-    
-    return {
-        'total_return': total_return,
-        'ann_return': ann_return,
-        'ann_vol': ann_vol,
-        'sharpe': sharpe,
-        'max_dd': max_dd,
-        'calmar': calmar
-    }
-
-metrics_strategy = calc_metrics(bt['strategy'])
-metrics_spy = calc_metrics(bt['spy'])
-metrics_tlt = calc_metrics(bt['tlt'])
-
-print("\n" + "=" * 80)
-print("BACKTEST RESULTS")
-print("=" * 80)
-print(f"\nPeriod: {bt.index[0].date()} to {bt.index[-1].date()}")
-print(f"Number of months: {len(bt)}")
-print(f"Number of trades: {n_trades}")
-
-print("\n--- Performance Comparison ---")
-print(f"{'Metric':<20} {'Strategy':>12} {'SPY B&H':>12} {'TLT B&H':>12}")
-print("-" * 60)
-print(f"{'Final $1':<20} ${metrics_strategy['total_return']+1:>11.3f} "
-      f"${metrics_spy['total_return']+1:>11.3f} ${metrics_tlt['total_return']+1:>11.3f}")
-print(f"{'Annual Return':<20} {metrics_strategy['ann_return']*100:>11.1f}% "
-      f"{metrics_spy['ann_return']*100:>11.1f}% {metrics_tlt['ann_return']*100:>11.1f}%")
-print(f"{'Sharpe Ratio':<20} {metrics_strategy['sharpe']:>11.2f} "
-      f"{metrics_spy['sharpe']:>11.2f} {metrics_tlt['sharpe']:>11.2f}")
-print(f"{'Max Drawdown':<20} {metrics_strategy['max_dd']*100:>11.1f}% "
-      f"{metrics_spy['max_dd']*100:>11.1f}% {metrics_tlt['max_dd']*100:>11.1f}%")
+final_return = bt['strategy_growth'].iloc[-1]
+print(f"✓ Strategy Final $1 Growth: ${final_return:.2f}")
 
 # =============================================================================
-# 7) CREATE VISUALIZATIONS
+# 6) GENERATE LIVE PREDICTION (THE FUTURE)
 # =============================================================================
-print("\n[8/8] Creating visualizations...")
+print("\n" + "="*80)
+print("[7/9] GENERATING LIVE FUTURE SIGNAL")
+print("="*80)
 
+# 1. Train a "Master Model" on ALL historical data available
+scaler_live = StandardScaler()
+X_all_scaled = scaler_live.fit_transform(X)
+y_all = y
+
+# Train robust models
+master_lr = LogisticRegression(C=0.1, random_state=42).fit(X_all_scaled, y_all)
+master_rf = RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42).fit(X_all_scaled, y_all)
+
+# 2. Prepare the Latest Data (Today's Data)
+latest_scaled = scaler_live.transform(latest_features)
+
+# 3. Predict
+prob_lr = master_lr.predict_proba(latest_scaled)[0, 1]
+prob_rf = master_rf.predict_proba(latest_scaled)[0, 1]
+final_prob = (prob_lr + prob_rf) / 2
+
+print(f"\nDate of Analysis: {datetime.now().date()}")
+print(f"Latest Data Point Used: {latest_features.index[0].date()}")
+print("-" * 40)
+print(f"Model Confidence (SPY vs TLT): {final_prob*100:.1f}%")
+print("-" * 40)
+
+if final_prob >= 0.55:
+    signal = "BULLISH - BUY STOCKS (SPY)"
+    emoji = "🚀"
+elif final_prob <= 0.45:
+    signal = "BEARISH - BUY BONDS (TLT)"
+    emoji = "🛡️"
+else:
+    signal = "NEUTRAL - CASH / HEDGE"
+    emoji = "⚖️"
+
+print(f"OFFICIAL SIGNAL FOR NEXT MONTH: {emoji} {signal} {emoji}")
+print("="*80)
+
+# =============================================================================
+# 7) SAVE PLOTS
+# =============================================================================
+print("\n[8/9] Saving updated plots...")
 plot_dir = "backtest_plots"
 os.makedirs(plot_dir, exist_ok=True)
 
-try:
-    # PLOT 1: Equity Curve
-    print("  Creating equity curve...")
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(bt.index, bt['strategy_growth'], label='Strategy', linewidth=2, color='#2E86AB')
-    ax.plot(bt.index, bt['spy_growth'], label='SPY', linewidth=2, color='#A23B72', linestyle='--')
-    ax.plot(bt.index, bt['tlt_growth'], label='TLT', linewidth=2, color='#F18F01', linestyle='--')
-    ax.set_xlabel('Date', fontsize=11)
-    ax.set_ylabel('Portfolio Value ($)', fontsize=11)
-    ax.set_title('Equity Curve: Growth of $1', fontsize=14, fontweight='bold')
-    ax.legend(loc='upper left', fontsize=10)
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f'{plot_dir}/1_equity_curve.png', dpi=150)
-    plt.close()
-    print(f"  ✓ Saved: {plot_dir}/1_equity_curve.png")
-    
-    # PLOT 2: Drawdown
-    print("  Creating drawdown chart...")
-    def calc_drawdown_series(growth_series):
-        running_max = growth_series.cummax()
-        return ((growth_series - running_max) / running_max) * 100
-    
-    dd_strategy = calc_drawdown_series(bt['strategy_growth'])
-    dd_spy = calc_drawdown_series(bt['spy_growth'])
-    
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.fill_between(bt.index, dd_strategy, 0, alpha=0.3, color='#2E86AB', label='Strategy')
-    ax.plot(bt.index, dd_strategy, linewidth=2, color='#2E86AB')
-    ax.plot(bt.index, dd_spy, linewidth=1.5, color='#A23B72', linestyle='--', label='SPY')
-    ax.set_xlabel('Date', fontsize=11)
-    ax.set_ylabel('Drawdown (%)', fontsize=11)
-    ax.set_title('Drawdown Analysis', fontsize=14, fontweight='bold')
-    ax.legend(loc='lower right', fontsize=10)
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f'{plot_dir}/2_drawdown.png', dpi=150)
-    plt.close()
-    print(f"  ✓ Saved: {plot_dir}/2_drawdown.png")
-    
-    # PLOT 3: Monthly Returns Heatmap
-    print("  Creating returns heatmap...")
-    returns_for_heatmap = bt['strategy'].copy()
-    returns_pivot = pd.DataFrame({
-        'Year': returns_for_heatmap.index.year,
-        'Month': returns_for_heatmap.index.month,
-        'Return': returns_for_heatmap.values * 100
-    })
-    returns_matrix = returns_pivot.pivot(index='Year', columns='Month', values='Return')
-    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-    returns_matrix.columns = [month_names[int(m)-1] for m in returns_matrix.columns]
-    
-    fig, ax = plt.subplots(figsize=(12, 6))
-    sns.heatmap(returns_matrix, annot=True, fmt='.1f', cmap='RdYlGn', center=0,
-                cbar_kws={'label': 'Return (%)'}, linewidths=0.5, ax=ax, vmin=-10, vmax=10)
-    ax.set_title('Monthly Returns Heatmap', fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(f'{plot_dir}/3_monthly_heatmap.png', dpi=150)
-    plt.close()
-    print(f"  ✓ Saved: {plot_dir}/3_monthly_heatmap.png")
-    
-    # PLOT 4: Regime Allocation
-    print("  Creating regime allocation...")
-    fig, ax = plt.subplots(figsize=(12, 6))
-    regime_df = pd.DataFrame({
-        'SPY': (bt['regime'] == 1).astype(int),
-        'CASH': (bt['regime'] == 0).astype(int),
-        'TLT': (bt['regime'] == -1).astype(int)
-    }, index=bt.index)
-    
-    ax.fill_between(regime_df.index, 0, regime_df['TLT'], label='TLT', alpha=0.7, color='#F18F01')
-    ax.fill_between(regime_df.index, regime_df['TLT'], regime_df['TLT'] + regime_df['CASH'],
-                    label='CASH', alpha=0.7, color='#90A959')
-    ax.fill_between(regime_df.index, regime_df['TLT'] + regime_df['CASH'], 1, 
-                    label='SPY', alpha=0.7, color='#2E86AB')
-    ax.set_xlabel('Date', fontsize=11)
-    ax.set_ylabel('Allocation', fontsize=11)
-    ax.set_title('Strategy Allocation Over Time', fontsize=14, fontweight='bold')
-    ax.legend(loc='upper left', fontsize=10)
-    ax.set_ylim(0, 1)
-    plt.tight_layout()
-    plt.savefig(f'{plot_dir}/4_regime_allocation.png', dpi=150)
-    plt.close()
-    print(f"  ✓ Saved: {plot_dir}/4_regime_allocation.png")
-    
-    # PLOT 5: AUC Over Time
-    print("  Creating AUC chart...")
-    window_centers = []
-    for _, row in df_metrics.iterrows():
-        center_date = row['test_start'] + (row['test_end'] - row['test_start']) / 2
-        window_centers.append(center_date)
-    
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(window_centers, df_metrics['auc'], marker='o', linewidth=2, markersize=6, color='#6A4C93')
-    ax.axhline(y=0.5, color='red', linestyle='--', linewidth=1.5, alpha=0.5, label='Random (0.5)')
-    mean_auc = df_metrics['auc'].mean()
-    ax.axhline(y=mean_auc, color='green', linestyle='--', linewidth=1.5, alpha=0.5, label=f'Mean={mean_auc:.3f}')
-    ax.set_xlabel('Date', fontsize=11)
-    ax.set_ylabel('AUC Score', fontsize=11)
-    ax.set_title('Model Performance Over Time', fontsize=14, fontweight='bold')
-    ax.legend(loc='best', fontsize=10)
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(0.3, 0.7)
-    plt.tight_layout()
-    plt.savefig(f'{plot_dir}/5_auc_over_time.png', dpi=150)
-    plt.close()
-    print(f"  ✓ Saved: {plot_dir}/5_auc_over_time.png")
-    
-    # PLOT 6: Annual Returns
-    print("  Creating annual returns...")
-    bt_annual = bt.copy()
-    bt_annual['year'] = bt_annual.index.year
-    annual_returns = bt_annual.groupby('year')[['strategy', 'spy', 'tlt']].apply(
-        lambda x: (1 + x).prod() - 1
-    ) * 100
-    
-    fig, ax = plt.subplots(figsize=(12, 6))
-    x = np.arange(len(annual_returns))
-    width = 0.25
-    ax.bar(x - width, annual_returns['strategy'], width, label='Strategy', color='#2E86AB', alpha=0.8)
-    ax.bar(x, annual_returns['spy'], width, label='SPY', color='#A23B72', alpha=0.8)
-    ax.bar(x + width, annual_returns['tlt'], width, label='TLT', color='#F18F01', alpha=0.8)
-    ax.set_xlabel('Year', fontsize=11)
-    ax.set_ylabel('Annual Return (%)', fontsize=11)
-    ax.set_title('Annual Returns Comparison', fontsize=14, fontweight='bold')
-    ax.set_xticks(x)
-    ax.set_xticklabels(annual_returns.index, rotation=45)
-    ax.legend(loc='best', fontsize=10)
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.axhline(y=0, color='black', linewidth=1)
-    plt.tight_layout()
-    plt.savefig(f'{plot_dir}/6_annual_returns.png', dpi=150)
-    plt.close()
-    print(f"  ✓ Saved: {plot_dir}/6_annual_returns.png")
-    
-    print(f"\n✓ All 6 plots saved to '{plot_dir}/' directory")
-    print(f"\nTo view plots:")
-    print(f"  Mac:     open {plot_dir}/")
-    print(f"  Or in VS Code: Click on the {plot_dir} folder in the sidebar")
-    
-except Exception as e:
-    print(f"\n⚠ Error creating plots: {e}")
-    print("  But don't worry - the backtest results are still valid!")
+# Equity Curve
+plt.figure(figsize=(12, 6))
+plt.plot(bt.index, bt['strategy_growth'], label='Your Strategy', color='#2E86AB', linewidth=2)
+plt.plot(bt.index, bt['spy_growth'], label='S&P 500', color='#A23B72', alpha=0.6)
+plt.title(f'Strategy Performance (Live Update: {datetime.now().date()})')
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.savefig(f'{plot_dir}/1_equity_curve.png')
+plt.close()
 
-print("\n" + "=" * 80)
-print("ANALYSIS COMPLETE!")
-print("=" * 80)
-print("\n✓ Script completed successfully!")
+# Prediction Gauge (Simple Bar)
+plt.figure(figsize=(6, 2))
+plt.barh(['Signal'], [final_prob], color='#2E86AB' if final_prob > 0.5 else '#F18F01')
+plt.xlim(0, 1)
+plt.axvline(0.5, color='red', linestyle='--')
+plt.title(f'Next Month Forecast: {final_prob:.2f}')
+plt.tight_layout()
+plt.savefig(f'{plot_dir}/forecast_gauge.png')
+plt.close()
 
+print(f"✓ Plots saved to {plot_dir}/")
+print("\n[9/9] COMPLETE.")
