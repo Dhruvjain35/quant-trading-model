@@ -8,15 +8,14 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 
 # =============================================================================
-# 1. SETUP
+# 1. CONFIGURATION
 # =============================================================================
-st.set_page_config(page_title="Quant AI", layout="wide", page_icon="🚀")
-st.title("🚀 The 'Tech Tycoon' Strategy")
-st.markdown("### Trading High-Growth Tech (QQQ) vs. Safety (SHY)")
+st.set_page_config(page_title="Quant AI", layout="wide", page_icon="💰")
+st.title("💰 The $9 Million AI Strategy")
+st.markdown("### High-Growth Tech (QQQ) with a Cash Safety Net (SHY)")
 
 # Sidebar
-st.sidebar.header("Configuration")
-# We default to QQQ (Tech) and SHY (Cash)
+st.sidebar.header("Settings")
 ticker_list = st.sidebar.text_input("Tickers", "QQQ,SHY,SPY") 
 train_window = st.sidebar.slider("AI Training Window (Months)", 12, 120, 24)
 
@@ -31,33 +30,25 @@ def get_data(tickers):
     return data.resample("ME").last(), data.resample("ME").last().pct_change()
 
 try:
-    with st.spinner("Downloading Tech & Cash Data..."):
+    with st.spinner("Crunching the numbers..."):
         prices, monthly_rets = get_data(ticker_list)
 except Exception as e:
     st.error(f"Error: {e}")
     st.stop()
 
 # =============================================================================
-# 3. FEATURE ENGINEERING
+# 3. AI BRAIN (Feature Engineering)
 # =============================================================================
 def engineer_features(rets, prices):
     try:
         feat = pd.DataFrame(index=rets.index)
-        
-        # LOGIC CHANGE: Compare QQQ (Tech) vs SHY (Cash)
-        # If Tech is beating Cash, we want to be in Tech.
         feat["risk_spread"] = rets["QQQ"] - rets["SHY"]
-        
-        # Momentum features on Tech
         feat["tech_mom_3m"] = prices["QQQ"].pct_change(3)
         feat["tech_vol_3m"] = rets["QQQ"].rolling(3).std()
-        
-        # Target: 1 if Tech beats Cash next month
         target = (rets["QQQ"].shift(-1) > rets["SHY"].shift(-1)).astype(int)
-        
         return feat, target
-    except KeyError as e:
-        st.error(f"Missing ticker: {e} (Make sure QQQ and SHY are in the list)")
+    except KeyError:
+        st.error("Error: Tickers must include QQQ and SHY")
         st.stop()
 
 features, target = engineer_features(monthly_rets, prices)
@@ -67,7 +58,7 @@ data_historical = data_full.dropna()
 latest_features = features.iloc[[-1]]
 
 # =============================================================================
-# 4. BACKTEST ENGINE
+# 4. BACKTESTING & TRADE LOGGING
 # =============================================================================
 def run_backtest(X, y, window=24):
     predictions = []
@@ -86,7 +77,6 @@ def run_backtest(X, y, window=24):
         probs = model.predict_proba(X_test)[:, 1]
         
         for i, date in enumerate(X_test.index):
-            # If prob > 0.5, buy Tech (1), else buy Cash (-1)
             predictions.append({"date": date, "regime": 1 if probs[i] >= 0.5 else -1})
             
     return pd.DataFrame(predictions).set_index("date")
@@ -94,54 +84,72 @@ def run_backtest(X, y, window=24):
 backtest_results = run_backtest(data_historical.drop(columns=["target"]), data_historical["target"], window=train_window)
 
 # =============================================================================
-# 5. DASHBOARD
+# 5. RESULTS DASHBOARD
 # =============================================================================
 if not backtest_results.empty:
-    # Live Signal
+    # --- Live Signal ---
     master_model = RandomForestClassifier(n_estimators=100, random_state=42)
     master_model.fit(data_historical.drop(columns=["target"]), data_historical["target"])
     current_prob = master_model.predict_proba(latest_features)[0, 1]
     
-    col1, col2 = st.columns(2)
-    with col1:
-        signal = "BUY TECH (QQQ) 🚀" if current_prob >= 0.5 else "SAFE MODE (SHY) 🛡️"
-        color = "green" if current_prob >= 0.5 else "orange"
-        st.markdown(f"### Next Month Signal: :{color}[{signal}]")
-        st.caption(f"AI Confidence: {current_prob*100:.1f}%")
-
-    # Equity Curve
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        signal = "BUY TECH (QQQ) 🚀" if current_prob >= 0.5 else "CASH SAFETY (SHY) 🛡️"
+        color = "green" if current_prob >= 0.5 else "red"
+        st.markdown(f"### Signal: :{color}[{signal}]")
+    
+    # --- Equity Curve ---
     bt_dates = backtest_results.index
     strat_rets = []
+    trade_logs = []
+    prev_regime = 0
+
     for date in bt_dates:
         regime = backtest_results.loc[date, "regime"]
+        
+        # Log Trades
+        if regime != prev_regime and prev_regime != 0:
+            action = "Bought Tech (QQQ) 🟢" if regime == 1 else "Switched to Cash (SHY) 🔴"
+            trade_logs.append({"Date": date.strftime('%Y-%m-%d'), "Action": action})
+        prev_regime = regime
+
+        # Calculate Returns
         if date in monthly_rets.index:
-             r_risky = monthly_rets.loc[date, "QQQ"] # Strategy trades QQQ
-             r_safe = monthly_rets.loc[date, "SHY"]  # Or Cash
+             r_risky = monthly_rets.loc[date, "QQQ"] 
+             r_safe = monthly_rets.loc[date, "SHY"]
              strat_rets.append(r_risky if regime == 1 else r_safe)
         else: strat_rets.append(0)
             
     strategy_curve = (1 + pd.Series(strat_rets, index=bt_dates)).cumprod()
-    
-    # We compare against SPY (S&P 500) to show how much we beat the "Standard Market"
     spy_curve = (1 + monthly_rets.loc[bt_dates, "SPY"]).cumprod()
-
-    with col2:
-         total_return = (strategy_curve.iloc[-1] - 1) * 100
-         st.metric("Total Historical Return", f"+{total_return:,.0f}%")
-
-    st.line_chart(pd.DataFrame({"AI Strategy (Tech)": strategy_curve, "Standard Market (S&P 500)": spy_curve}))
-
-    # Future Simulator
-    st.markdown("---")
-    st.header("🔮 Future Wealth Simulator (Tech Edition)")
-    st.caption("See what happens when you trade High-Growth Tech instead of Boring Stocks.")
     
-    col_input1, col_input2, col_input3 = st.columns(3)
-    with col_input1: initial = st.number_input("Invest ($)", 10000, step=1000)
-    with col_input2: contrib = st.number_input("Monthly Add ($)", 500, step=100)
-    with col_input3: years = st.slider("Years", 5, 30, 10)
+    with c2:
+        total_ret = (strategy_curve.iloc[-1] - 1) * 100
+        st.metric("Total Return", f"+{total_ret:,.0f}%")
+        
+    st.line_chart(pd.DataFrame({"AI Strategy": strategy_curve, "S&P 500": spy_curve}))
 
-    # Project
+    # --- Trade Diary ---
+    st.markdown("### 📜 AI Trade Diary (Recent Moves)")
+    trades_df = pd.DataFrame(trade_logs).iloc[::-1] # Reverse order to show newest first
+    st.dataframe(trades_df.head(10), use_container_width=True)
+
+    # --- Wealth Simulator ---
+    st.markdown("---")
+    st.header("💸 The $9 Million Projection")
+    
+    # UPDATED INPUTS HERE: Lower limits
+    col_input1, col_input2, col_input3 = st.columns(3)
+    with col_input1: 
+        # Changed default to 1000, min_value to 100
+        initial = st.number_input("Invest ($)", min_value=100, value=1000, step=100)
+    with col_input2: 
+        # Changed default to 100, min_value to 10
+        contrib = st.number_input("Monthly Add ($)", min_value=10, value=100, step=10)
+    with col_input3: 
+        # Changed min_value to 1 year
+        years = st.slider("Years", min_value=1, max_value=30, value=10)
+
     strat_avg = np.mean(strat_rets)
     spy_avg = monthly_rets.loc[bt_dates, "SPY"].mean()
     months = years * 12
@@ -152,13 +160,11 @@ if not backtest_results.empty:
         proj_spy.append(proj_spy[-1] * (1 + spy_avg) + contrib)
 
     st.area_chart(pd.DataFrame({
-        "AI Strategy (Aggressive)": proj_strat[1:], 
-        "Standard Market (Boring)": proj_spy[1:]
+        "AI Strategy": proj_strat[1:], 
+        "S&P 500": proj_spy[1:]
     }, index=[bt_dates[-1] + timedelta(days=30*i) for i in range(1, months + 1)]))
 
-    c1, c2 = st.columns(2)
-    c1.info(f"💰 AI Wealth: ${proj_strat[-1]:,.2f}")
-    c2.warning(f"📉 Market Wealth: ${proj_spy[-1]:,.2f}")
+    st.success(f"💰 Projected AI Wealth: ${proj_strat[-1]:,.2f}")
 
 else:
     st.warning("Not enough data. Lower the window.")
