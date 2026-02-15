@@ -1,18 +1,18 @@
-# 📊 Multi-Asset Tactical Allocation Model
+# Multi-Asset Tactical Allocation Model
 
 An ML-powered trading strategy that dynamically switches between stocks (SPY), bonds (TLT), and cash based on market conditions.
 
 ![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-## 🎯 Overview
+##  Overview
 
 This quantitative trading model uses ensemble machine learning to predict whether stocks or bonds will outperform in the next month. It combines three algorithms:
 - **Logistic Regression** - Linear baseline
 - **Random Forest** - Captures non-linear patterns  
 - **Gradient Boosting** - Sequential learning
 
-## ✨ Features
+##  Features
 
 - **22 Market Indicators**: Momentum, volatility, trend, and correlation features
 - **Walk-Forward Validation**: Proper out-of-sample testing (no lookahead bias)
@@ -20,7 +20,7 @@ This quantitative trading model uses ensemble machine learning to predict whethe
 - **Interactive Dashboard**: Beautiful Streamlit web app
 - **Professional Visualizations**: Equity curves, drawdowns, heatmaps
 
-## 📈 Performance
+##  Performance
 
 - **Backtest Period**: 2013-2025 (131 months)
 - **Strategy**: Dynamic allocation between SPY/TLT/CASH
@@ -28,7 +28,7 @@ This quantitative trading model uses ensemble machine learning to predict whethe
 - **Sharpe Ratio**: 0.17 (strategy) vs 1.02 (SPY)
 - **Max Drawdown**: -20.6% (strategy) vs -23.9% (SPY)
 
-## 🛠️ Installation
+##  Installation
 ```bash
 # Clone the repository
 git clone https://github.com/Inkspire-Custom-Arts/quant-trading-model.git
@@ -42,7 +42,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 💻 Usage
+##  Usage
 
 ### Option 1: Terminal Version (CLI)
 ```bash
@@ -55,7 +55,7 @@ streamlit run trading_app.py
 ```
 Opens at `http://localhost:8501` with interactive charts!
 
-## 📊 What You Get
+##  What You Get
 
 1. **Equity Curve** - Growth of $1 over time
 2. **Drawdown Chart** - Risk visualization
@@ -64,7 +64,7 @@ Opens at `http://localhost:8501` with interactive charts!
 5. **Model AUC** - Prediction quality
 6. **Annual Returns** - Year-by-year comparison
 
-## 🧠 How It Works
+##  How It Works
 
 1. **Data Collection**: Downloads historical prices (SPY, QQQ, IWM, TLT, GLD)
 2. **Feature Engineering**: Creates 22 technical indicators
@@ -72,17 +72,17 @@ Opens at `http://localhost:8501` with interactive charts!
 4. **Signal Generation**: Ensemble prediction → regime decision
 5. **Backtesting**: Realistic simulation with transaction costs
 
-## ⚠️ Disclaimer
+## Disclaimer
 
 **This project is for educational purposes only.**
 - Not financial advice
 - Past performance ≠ future results
 - Trading involves risk of loss
 
-## 📝 License
+## License
 
 MIT License
 
 ---
 
-**Built with Python, scikit-learn, and Streamlit** 🐍📊
+**Built with Python, scikit-learn, and Streamlit** 
