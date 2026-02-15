@@ -6,33 +6,33 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
 
 # =============================================================================
-# 1. SETUP & CONFIGURATION
+# 1. SETUP
 # =============================================================================
-st.set_page_config(page_title="Quant AI", layout="wide", page_icon="🤖")
-st.title("AI Financial Advisor & Time Machine")
-st.markdown("### Historical Backtest + Future Wealth Projector")
+st.set_page_config(page_title="Quant AI", layout="wide", page_icon="🛡️")
+st.title("🛡️ The 'Cash is King' Strategy")
+st.markdown("### AI that switches between Stocks (Risky) and Short-Term Bonds (Safe Cash)")
 
 # Sidebar
 st.sidebar.header("Configuration")
-ticker_list = st.sidebar.text_input("Tickers", "SPY,TLT,QQQ,IWM,GLD")
-train_window = st.sidebar.slider("AI Training Window (Months)", 24, 120, 48)
+# We use SHY (1-3 Year Treasury) as our "Cash" substitute because it has longer history than BIL
+ticker_list = st.sidebar.text_input("Tickers", "SPY,SHY,QQQ,IWM") 
+train_window = st.sidebar.slider("AI Training Window (Months)", 12, 120, 24)
 
 # =============================================================================
 # 2. DATA LOADING
 # =============================================================================
 @st.cache_data
 def get_data(tickers):
-    # Force download until today
+    # Download data
     data = yf.download(tickers.split(','), start="2000-01-01", end=datetime.now().strftime('%Y-%m-%d'), auto_adjust=True, progress=False)["Close"]
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
     return data.resample("ME").last(), data.resample("ME").last().pct_change()
 
 try:
-    with st.spinner("Downloading Market Data..."):
+    with st.spinner("Downloading Data (Replacing TLT with SHY)..."):
         prices, monthly_rets = get_data(ticker_list)
 except Exception as e:
     st.error(f"Error: {e}")
@@ -44,10 +44,17 @@ except Exception as e:
 def engineer_features(rets, prices):
     try:
         feat = pd.DataFrame(index=rets.index)
-        feat["risk_on_spread"] = rets["SPY"] - rets["TLT"]
-        feat["spy_mom_6m"] = prices["SPY"].pct_change(6)
+        
+        # KEY CHANGE: Compare SPY to SHY (Cash) instead of TLT (Long Bonds)
+        feat["risk_on_spread"] = rets["SPY"] - rets["SHY"]
+        
+        # Momentum features
+        feat["spy_mom_3m"] = prices["SPY"].pct_change(3)
         feat["spy_vol_3m"] = rets["SPY"].rolling(3).std()
-        target = (rets["SPY"].shift(-1) > rets["TLT"].shift(-1)).astype(int)
+        
+        # Target: 1 if Stocks beat Cash next month
+        target = (rets["SPY"].shift(-1) > rets["SHY"].shift(-1)).astype(int)
+        
         return feat, target
     except KeyError as e:
         st.error(f"Missing ticker: {e}")
@@ -62,7 +69,7 @@ latest_features = features.iloc[[-1]]
 # =============================================================================
 # 4. BACKTEST ENGINE
 # =============================================================================
-def run_backtest(X, y, window=48):
+def run_backtest(X, y, window=24):
     predictions = []
     if len(X) < window + 12: return pd.DataFrame()
     
@@ -86,7 +93,7 @@ def run_backtest(X, y, window=48):
 backtest_results = run_backtest(data_historical.drop(columns=["target"]), data_historical["target"], window=train_window)
 
 # =============================================================================
-# 5. DASHBOARD - PART 1: HISTORY & SIGNAL
+# 5. DASHBOARD
 # =============================================================================
 if not backtest_results.empty:
     # Live Signal
@@ -96,20 +103,20 @@ if not backtest_results.empty:
     
     col1, col2 = st.columns(2)
     with col1:
-        signal = "BUY STOCKS (SPY) 🚀" if current_prob >= 0.5 else "BUY BONDS (TLT) 🛡️"
-        color = "green" if current_prob >= 0.5 else "red"
+        signal = "BUY STOCKS (SPY) 🚀" if current_prob >= 0.5 else "STAY IN CASH (SHY) 💤"
+        color = "green" if current_prob >= 0.5 else "orange"
         st.markdown(f"### Next Month Signal: :{color}[{signal}]")
         st.caption(f"AI Confidence: {current_prob*100:.1f}%")
 
-    # Equity Curve
+    # Equity Curve Calculation
     bt_dates = backtest_results.index
     strat_rets = []
     for date in bt_dates:
         regime = backtest_results.loc[date, "regime"]
         if date in monthly_rets.index:
              r_spy = monthly_rets.loc[date, "SPY"]
-             r_tlt = monthly_rets.loc[date, "TLT"]
-             strat_rets.append(r_spy if regime == 1 else r_tlt)
+             r_shy = monthly_rets.loc[date, "SHY"] # Replaced TLT with SHY
+             strat_rets.append(r_spy if regime == 1 else r_shy)
         else: strat_rets.append(0)
             
     strategy_curve = (1 + pd.Series(strat_rets, index=bt_dates)).cumprod()
@@ -119,63 +126,35 @@ if not backtest_results.empty:
          total_return = (strategy_curve.iloc[-1] - 1) * 100
          st.metric("Total Historical Return", f"+{total_return:,.0f}%")
 
-    st.line_chart(pd.DataFrame({"Strategy (AI)": strategy_curve, "S&P 500": spy_curve}))
+    st.line_chart(pd.DataFrame({"Strategy (Cash-Safe)": strategy_curve, "S&P 500": spy_curve}))
 
-    # =============================================================================
-    # 6. DASHBOARD - PART 2: FUTURE SIMULATOR (THE TIME MACHINE)
-    # =============================================================================
+    # Future Simulator
     st.markdown("---")
-    st.header("🔮 Future Wealth Simulator")
-    st.markdown("Project your potential growth based on the strategy's past performance.")
-
+    st.header("🔮 Future Wealth Simulator (Cash-Safe Edition)")
+    
     col_input1, col_input2, col_input3 = st.columns(3)
-    
-    with col_input1:
-        initial_investment = st.number_input("Initial Investment ($)", value=10000, step=1000)
-    with col_input2:
-        monthly_contribution = st.number_input("Monthly Contribution ($)", value=500, step=100)
-    with col_input3:
-        years = st.slider("Years to Project", 5, 30, 10)
+    with col_input1: initial = st.number_input("Invest ($)", 10000, step=1000)
+    with col_input2: contrib = st.number_input("Monthly Add ($)", 500, step=100)
+    with col_input3: years = st.slider("Years", 5, 30, 10)
 
-    # Calculate Stats for Projection
-    strat_avg_monthly = np.mean(strat_rets)
-    spy_avg_monthly = monthly_rets.loc[bt_dates, "SPY"].mean()
+    # Project
+    strat_avg = np.mean(strat_rets)
+    spy_avg = monthly_rets.loc[bt_dates, "SPY"].mean()
+    months = years * 12
+    proj_strat, proj_spy = [initial], [initial]
 
-    # Generate Future Dates
-    future_months = years * 12
-    last_date = bt_dates[-1]
-    future_dates = [last_date + timedelta(days=30*i) for i in range(1, future_months + 1)]
+    for i in range(months):
+        proj_strat.append(proj_strat[-1] * (1 + strat_avg) + contrib)
+        proj_spy.append(proj_spy[-1] * (1 + spy_avg) + contrib)
 
-    # Project Growth
-    proj_strat = [initial_investment]
-    proj_spy = [initial_investment]
+    st.area_chart(pd.DataFrame({
+        "AI Strategy": proj_strat[1:], 
+        "S&P 500": proj_spy[1:]
+    }, index=[bt_dates[-1] + timedelta(days=30*i) for i in range(1, months + 1)]))
 
-    for i in range(future_months):
-        # Strategy Projection
-        prev_strat = proj_strat[-1]
-        new_strat = prev_strat * (1 + strat_avg_monthly) + monthly_contribution
-        proj_strat.append(new_strat)
-
-        # SPY Projection
-        prev_spy = proj_spy[-1]
-        new_spy = prev_spy * (1 + spy_avg_monthly) + monthly_contribution
-        proj_spy.append(new_spy)
-
-    # Plot Projection
-    future_df = pd.DataFrame({
-        "AI Strategy (Projected)": proj_strat[1:],
-        "S&P 500 (Projected)": proj_spy[1:]
-    }, index=future_dates)
-
-    st.area_chart(future_df)
-
-    # Results
-    final_strat = proj_strat[-1]
-    final_spy = proj_spy[-1]
-    
     c1, c2 = st.columns(2)
-    c1.info(f"💰 **Projected Strategy Wealth:** ${final_strat:,.2f}")
-    c2.warning(f"📉 **Projected Market Wealth:** ${final_spy:,.2f}")
-    
+    c1.info(f"💰 AI Wealth: ${proj_strat[-1]:,.2f}")
+    c2.warning(f"📉 Market Wealth: ${proj_spy[-1]:,.2f}")
+
 else:
-    st.warning("Not enough data to run backtest. Lower the training window.")
+    st.warning("Not enough data. Lower the window.")
