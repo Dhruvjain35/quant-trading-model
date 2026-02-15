@@ -58,7 +58,7 @@ data_historical = data_full.dropna()
 latest_features = features.iloc[[-1]]
 
 # =============================================================================
-# 4. BACKTESTING & TRADE LOGGING
+# 4. BACKTESTING
 # =============================================================================
 def run_backtest(X, y, window=24):
     predictions = []
@@ -98,27 +98,57 @@ if not backtest_results.empty:
         color = "green" if current_prob >= 0.5 else "red"
         st.markdown(f"### Signal: :{color}[{signal}]")
     
-    # --- Equity Curve ---
+    # --- Equity Curve Calculation ---
     bt_dates = backtest_results.index
     strat_rets = []
+    
+    # New Trade Log Logic
     trade_logs = []
-    prev_regime = 0
-
-    for date in bt_dates:
+    current_trade_start = bt_dates[0]
+    current_regime = backtest_results.loc[bt_dates[0], "regime"]
+    
+    for i, date in enumerate(bt_dates):
         regime = backtest_results.loc[date, "regime"]
         
-        # Log Trades
-        if regime != prev_regime and prev_regime != 0:
-            action = "Bought Tech (QQQ) 🟢" if regime == 1 else "Switched to Cash (SHY) 🔴"
-            trade_logs.append({"Date": date.strftime('%Y-%m-%d'), "Action": action})
-        prev_regime = regime
-
-        # Calculate Returns
+        # Calculate Returns for Curve
         if date in monthly_rets.index:
              r_risky = monthly_rets.loc[date, "QQQ"] 
              r_safe = monthly_rets.loc[date, "SHY"]
              strat_rets.append(r_risky if regime == 1 else r_safe)
         else: strat_rets.append(0)
+
+        # Detect Trade Switch or End of Data
+        if regime != current_regime or i == len(bt_dates) - 1:
+            # Calculate performance for the period we just finished
+            period_data = monthly_rets.loc[current_trade_start:date]
+            
+            # Strategy Return for this specific period
+            if current_regime == 1:
+                period_strat = (1 + period_data["QQQ"]).prod() - 1
+                asset_name = "Held Tech (QQQ)"
+            else:
+                period_strat = (1 + period_data["SHY"]).prod() - 1
+                asset_name = "Sat in Cash (SHY)"
+            
+            # Market (SPY) Return for same period
+            period_spy = (1 + period_data["SPY"]).prod() - 1
+            
+            # Did we win?
+            diff = period_strat - period_spy
+            outcome = "✅ Beat Mkt" if diff > 0 else "❌ Lagged"
+            
+            trade_logs.append({
+                "Start": current_trade_start.strftime('%Y-%m-%d'),
+                "End": date.strftime('%Y-%m-%d'),
+                "Action": asset_name,
+                "Our Return": f"{period_strat*100:.1f}%",
+                "Market Return": f"{period_spy*100:.1f}%",
+                "Outcome": f"{outcome} ({diff*100:.1f}%)"
+            })
+            
+            # Reset for next trade
+            current_trade_start = date
+            current_regime = regime
             
     strategy_curve = (1 + pd.Series(strat_rets, index=bt_dates)).cumprod()
     spy_curve = (1 + monthly_rets.loc[bt_dates, "SPY"]).cumprod()
@@ -129,8 +159,9 @@ if not backtest_results.empty:
         
     st.line_chart(pd.DataFrame({"AI Strategy": strategy_curve, "S&P 500": spy_curve}))
 
-    # --- Trade Diary ---
-    st.markdown("### 📜 AI Trade Diary (Recent Moves)")
+    # --- Trade Diary (Enhanced) ---
+    st.markdown("### 📜 AI Scorecard: Did the Move Pay Off?")
+    st.markdown("Comparing each trade decision against just holding the S&P 500.")
     trades_df = pd.DataFrame(trade_logs).iloc[::-1]
     st.dataframe(trades_df.head(10), use_container_width=True)
 
@@ -160,7 +191,7 @@ if not backtest_results.empty:
         "S&P 500": proj_spy[1:]
     }, index=[bt_dates[-1] + timedelta(days=30*i) for i in range(1, months + 1)]))
 
-    # --- FINAL COMPARISON BOXES (FIXED) ---
+    # --- FINAL COMPARISON BOXES ---
     col_res1, col_res2 = st.columns(2)
     with col_res1:
         st.success(f"💰 Projected AI Wealth: ${proj_strat[-1]:,.2f}")
