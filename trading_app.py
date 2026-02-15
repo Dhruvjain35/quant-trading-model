@@ -131,23 +131,19 @@ if not backtest_results.empty:
 
     # --- Trade Diary ---
     st.markdown("### 📜 AI Trade Diary (Recent Moves)")
-    trades_df = pd.DataFrame(trade_logs).iloc[::-1] # Reverse order to show newest first
+    trades_df = pd.DataFrame(trade_logs).iloc[::-1]
     st.dataframe(trades_df.head(10), use_container_width=True)
 
     # --- Wealth Simulator ---
     st.markdown("---")
     st.header("💸 The $9 Million Projection")
     
-    # UPDATED INPUTS HERE: Lower limits
     col_input1, col_input2, col_input3 = st.columns(3)
     with col_input1: 
-        # Changed default to 1000, min_value to 100
         initial = st.number_input("Invest ($)", min_value=100, value=1000, step=100)
     with col_input2: 
-        # Changed default to 100, min_value to 10
         contrib = st.number_input("Monthly Add ($)", min_value=10, value=100, step=10)
     with col_input3: 
-        # Changed min_value to 1 year
         years = st.slider("Years", min_value=1, max_value=30, value=10)
 
     strat_avg = np.mean(strat_rets)
@@ -164,7 +160,12 @@ if not backtest_results.empty:
         "S&P 500": proj_spy[1:]
     }, index=[bt_dates[-1] + timedelta(days=30*i) for i in range(1, months + 1)]))
 
-    st.success(f"💰 Projected AI Wealth: ${proj_strat[-1]:,.2f}")
+    # --- FINAL COMPARISON BOXES (FIXED) ---
+    col_res1, col_res2 = st.columns(2)
+    with col_res1:
+        st.success(f"💰 Projected AI Wealth: ${proj_strat[-1]:,.2f}")
+    with col_res2:
+        st.warning(f"📉 Projected Market Wealth: ${proj_spy[-1]:,.2f}")
 
 else:
     st.warning("Not enough data. Lower the window.")
