@@ -58,7 +58,7 @@ except Exception as e:
 # =============================================================================
 # 3. ADVANCED FEATURE ENGINEERING
 # =============================================================================
-def engineer_features(prices, rets, risky):
+def engineer_features(prices, rets, risky, safe):
     df = pd.DataFrame(index=prices.index)
     
     # 1. Macro: Yield Curve Proxy
@@ -81,7 +81,7 @@ def engineer_features(prices, rets, risky):
     
     return df.dropna(), target.dropna()
 
-features, target = engineer_features(prices, rets, ticker_risky)
+features, target = engineer_features(prices, rets, ticker_risky, ticker_safe)
 common = features.index.intersection(target.index)
 features, target = features.loc[common], target.loc[common]
 
