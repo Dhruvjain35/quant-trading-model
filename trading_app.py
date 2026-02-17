@@ -21,18 +21,46 @@ ticker_list = st.sidebar.text_input("Universe (Risky, Safe, Benchmark)", "QQQ,SH
 train_window = st.sidebar.slider("Lookback Window (Months)", 12, 120, 24)
 
 # =============================================================================
-# 2. DATA INGESTION
+# 2. DATA INGESTION (FIXED & ROBUST)
 # =============================================================================
 @st.cache_data
 def get_data(tickers):
-    data = yf.download(tickers.split(','), start="2000-01-01", end=datetime.now().strftime('%Y-%m-%d'), auto_adjust=True, progress=False)["Close"]
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-    return data.resample("ME").last(), data.resample("ME").last().pct_change()
+    # 1. Clean the ticker text (remove spaces)
+    clean_tickers = [t.strip().upper() for t in tickers.split(',')]
+    
+    # 2. Download data (Safe Mode)
+    # We ask for "Adj Close" to account for dividends/splits
+    data = yf.download(clean_tickers, start="2000-01-01", end=datetime.now().strftime('%Y-%m-%d'), progress=False)
+    
+    # 3. Handle yfinance column messiness
+    if "Adj Close" in data:
+        data = data["Adj Close"]
+    elif "Close" in data:
+        data = data["Close"]
+    
+    # 4. Ensure it's a DataFrame, not a Series (if only 1 ticker)
+    if isinstance(data, pd.Series):
+        data = data.to_frame()
+        
+    # 5. Drop any columns that are all NaN (bad tickers)
+    data = data.dropna(axis=1, how='all')
+    
+    # 6. Resample to Monthly (using 'M' for max compatibility)
+    data_monthly = data.resample("M").last()
+    rets_monthly = data_monthly.pct_change()
+    
+    return data_monthly, rets_monthly
 
 try:
     with st.spinner("Fetching Institutional Data..."):
         prices, monthly_rets = get_data(ticker_list)
+        
+        # Check if we actually got data for the required tickers
+        required_tickers = [t.strip() for t in ticker_list.split(',')]
+        missing = [t for t in required_tickers if t not in prices.columns]
+        if missing:
+            st.warning(f"⚠️ Could not find data for: {missing}. Check spelling!")
+            
 except Exception as e:
     st.error(f"Data Error: {e}")
     st.stop()
