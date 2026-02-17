@@ -215,7 +215,7 @@ if st.button("🚀 Execute Research Pipeline"):
     
     # Plot Summary
     fig_shap = plt.figure()
-    shap.summary_plot(shap_values[1], features.iloc[-100:], plot_type="bar", show=False)
+    shap.summary_plot(shap_values[1][-100:], features.iloc[-100:], plot_type="bar", show=False)
     st.pyplot(fig_shap)
 
 else:
