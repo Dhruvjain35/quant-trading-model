@@ -1,4 +1,5 @@
 import streamlit as st
+import matplotlib.pyplot as plt
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -213,7 +214,6 @@ if st.button("🚀 Execute Research Pipeline"):
     shap_values = explainer.shap_values(features.iloc[-100:])
     
     # Plot Summary
-    st.set_option('deprecation.showPyplotGlobalUse', False)
     fig_shap = plt.figure()
     shap.summary_plot(shap_values[1], features.iloc[-100:], plot_type="bar", show=False)
     st.pyplot(fig_shap)
