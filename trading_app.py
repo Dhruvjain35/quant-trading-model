@@ -214,8 +214,19 @@ if st.button("🚀 Execute Research Pipeline"):
     shap_values = explainer.shap_values(features.iloc[-100:])
     
     # Plot Summary
+    # Plot Summary
+    st.subheader("4. SHAP Feature Attribution")
+    
+    # 1. Figure out how many features the model actually used
+    expected_features = shap_values[1].shape[1]
+    
+    # 2. Slice the dataframe to match (Last 100 rows, FIRST 'N' columns)
+    # This ignores any extra columns (like 'Signal' or 'Returns') you added later
+    X_subset = features.iloc[-100:, :expected_features]
+    shap_subset = shap_values[1][-100:]
+
     fig_shap = plt.figure()
-    shap.summary_plot(shap_values[1][-100:], features.iloc[-100:], plot_type="bar", show=False)
+    shap.summary_plot(shap_subset, X_subset, plot_type="bar", show=False)
     st.pyplot(fig_shap)
 
 else:
