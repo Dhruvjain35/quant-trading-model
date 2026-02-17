@@ -213,10 +213,16 @@ if run:
     bt, rf_model, X_last = run_ensemble(feats, tgt, emb*21)
     prog.progress(50)
 
-    res = bt.join(rets).dropna()
-    res['SR'] = np.where(res['Signal']==1, res[R], res[S])   # strategy return
-    res['BR'] = res[R]                                         # benchmark return
-    res['ER'] = res['SR'] - res[S]                            # excess return
+    # Join backtest signals with returns - handle column naming carefully
+    rets_bt = rets[[R, S]].copy()
+    res = bt.join(rets_bt).dropna()
+    
+    # Rename to avoid any column conflicts
+    res = res.rename(columns={R: 'RET_RISKY', S: 'RET_SAFE'})
+    
+    res['SR'] = np.where(res['Signal']==1, res['RET_RISKY'], res['RET_SAFE'])  # strategy return
+    res['BR'] = res['RET_RISKY']                                                # benchmark return
+    res['ER'] = res['SR'] - res['RET_SAFE']                                    # excess return
 
     cs = (1+res['SR']).cumprod()
     cb = (1+res['BR']).cumprod()
@@ -404,7 +410,7 @@ if run:
         sigs    = res['Signal'].values.copy()
         for _ in range(1000):
             shf  = np.random.permutation(sigs)
-            sr   = np.where(shf==1, res[R].values, res[S].values)
+            sr   = np.where(shf==1, res['RET_RISKY'].values, res['RET_SAFE'].values)
             m,sd = np.mean(sr), np.std(sr)
             if sd>0: perm_sh.append((m/sd)*np.sqrt(252))
         pa   = np.array(perm_sh)
