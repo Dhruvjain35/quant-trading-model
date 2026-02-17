@@ -250,36 +250,51 @@ if st.sidebar.button("🚀 Run Research Pipeline"):
         ac1.metric("Alpha (Annualized)", f"{alpha_ann*100:.1f}%", f"P-Value: {p_val:.3f} {sig_stars}")
         ac2.metric("Beta (Correlation)", f"{beta:.2f}", "Target < 0.6 (Defensive)")
 
-        # D. SHAP Attribution
+        
+       # D. SHAP Feature Attribution
         st.subheader("4. SHAP Feature Attribution")
         try:
-            # Create explainer
+            # 1. Calculate SHAP values
             explainer = shap.TreeExplainer(last_model)
             shap_values = explainer.shap_values(X_train_last)
             
-            # Robust Slicing Fix
-            # 1. Get correct dimensions
+            # 2. Handle Binary Classification (Grab the "True" class)
             if isinstance(shap_values, list):
-                sv = shap_values[1] # For binary classification
+                sv = shap_values[1]
             else:
                 sv = shap_values
             
-            # 2. Slice both data and shap values to match last 100 days
+            # 3. Slice the data (Last 100 days only)
             n_display = 100
             features_display = features.iloc[-n_display:]
             sv_display = sv[-n_display:]
 
-            # 3. Ensure columns match
-            # This protects against any accidental column mismatches
-            common_cols = features.columns
-            features_display = features_display[common_cols]
+            # 4. PLOTTING FIX (The "White Box" Solution)
+            plt.close('all') # Close any lingering open plots
             
-            fig_shap = plt.figure()
+            # Draw the SHAP plot
             shap.summary_plot(sv_display, features_display, plot_type="bar", show=False)
+            
+            # Grab the figure that SHAP just drew on
+            fig_shap = plt.gcf() 
+            
+            # Customize it to match Dark Mode
+            fig_shap.patch.set_facecolor('#0E1117')
+            ax = plt.gca()
+            ax.set_facecolor('#0E1117')
+            ax.tick_params(colors='white')
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            
+            # Display it
             st.pyplot(fig_shap)
             
+            # Clean up memory
+            plt.clf()
+            
         except Exception as e:
-            st.warning(f"SHAP visualization skipped due to data alignment: {e}")
+            st.error(f"SHAP Error: {str(e)}")
+           
 
 else:
     st.info("👈 Set parameters in the sidebar and click 'Run Research Pipeline' to begin.")
