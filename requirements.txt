@@ -7,3 +7,12 @@ altair>=5.0.0
 plotly
 matplotlib
 seaborn
+
+shap
+statsmodels
+scipy
+yfinance
+plotly
+scikit-learn
+streamlit
+matplotlib
