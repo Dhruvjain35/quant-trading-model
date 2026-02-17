@@ -82,44 +82,58 @@ def engineer_features(prices, rets, ticker_risky):
 # ==========================================
 # 3. ENSEMBLE ENGINE
 # ==========================================
+# ==========================================
+# 3. ENSEMBLE ENGINE (OPTIMIZED)
+# ==========================================
 def run_ensemble(X, y, gap):
     results = []
     # Train on expanding window
     start_idx = 252 * 4  # 4 years warm-up
     
+    # NEW: Pre-define models to reuse
+    lr = LogisticRegression(C=0.1)
+    rf = RandomForestClassifier(n_estimators=50, max_depth=3, random_state=42)
+    scaler = StandardScaler()
+
+    # Optimization: Re-train only every 63 days (Quarterly)
+    retrain_freq = 63 
+    
     for i in range(start_idx, len(X)):
-        train_end = i - gap
-        if train_end < 252: continue
+        # 1. Train ONLY if it's a "Re-train Day"
+        if (i - start_idx) % retrain_freq == 0:
+            train_end = i - gap
+            if train_end < 252: continue
+            
+            X_train = X.iloc[:train_end]
+            y_train = y.iloc[:train_end]
+            
+            # Scale & Fit
+            X_train_s = scaler.fit_transform(X_train)
+            lr.fit(X_train_s, y_train)
+            rf.fit(X_train, y_train)
         
-        X_train = X.iloc[:train_end]
-        y_train = y.iloc[:train_end]
+        # 2. Predict for TODAY using the current model
         X_test = X.iloc[[i]]
         
-        # Scale Data
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_train)
-        X_test_s = scaler.transform(X_test)
-
-        # Models
-        lr = LogisticRegression(C=0.1)
-        rf = RandomForestClassifier(n_estimators=50, max_depth=3, random_state=42)
-        
-        lr.fit(X_train_s, y_train)
-        rf.fit(X_train, y_train)
-        
-        # Predictions
-        prob_lr = lr.predict_proba(X_test_s)[0][1]
-        prob_rf = rf.predict_proba(X_test)[0][1]
-        
-        # Ensemble Vote (Equal Weight)
-        final_signal = 1 if (prob_lr + prob_rf) / 2 > 0.5 else 0
-        results.append({
-            'Date': X.index[i],
-            'Signal': final_signal,
-            'Prob_LR': prob_lr,
-            'Prob_RF': prob_rf
-        })
+        # Careful: Transform test data using the *current* scaler stats
+        try:
+            X_test_s = scaler.transform(X_test)
+            
+            prob_lr = lr.predict_proba(X_test_s)[0][1]
+            prob_rf = rf.predict_proba(X_test)[0][1]
+            
+            final_signal = 1 if (prob_lr + prob_rf) / 2 > 0.5 else 0
+            
+            results.append({
+                'Date': X.index[i],
+                'Signal': final_signal,
+                'Prob_LR': prob_lr,
+                'Prob_RF': prob_rf
+            })
+        except:
+            pass # Skip if model hasn't trained yet
     
+    # Return results and the LAST trained model/data for SHAP
     return pd.DataFrame(results).set_index('Date'), rf, X_train
 
 # ==========================================
