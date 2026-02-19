@@ -1,8 +1,10 @@
-streamlit
-altair
+yfinance
 pandas
 numpy
-yfinance
 scikit-learn
-statsmodels
+streamlit
+plotly
 shap
+statsmodels
+matplotlib
+altair
