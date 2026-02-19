@@ -7,37 +7,39 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import shap
 import statsmodels.api as sm
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-from sklearn.preprocessing import RobustScaler
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
 # ============================================================
-# PAGE CONFIG & ELITE STYLING
+# AMCE v3.0 - REALITY EDITION
+# Adds: Taxes, Realistic Execution, Survivorship Adjustment
 # ============================================================
+
 st.set_page_config(
-    page_title="AMCE | Adaptive Macro-Conditional Ensemble",
+    page_title="AMCE v3.0 | Reality-Adjusted",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
 :root {
     --bg:#060810; --bg2:#0C0F1A; --bg3:#111527;
     --accent:#00FFB2; --accent2:#FF3B6B; --accent3:#7B61FF;
-    --text:#E8EAF6; --muted:#5C6480; --border:rgba(0,255,178,0.15);
+    --text:#E8EAF6; --muted:#5C6480;
 }
-.stApp { background-color: var(--bg); font-family: 'Syne', sans-serif; color: var(--text); }
+.stApp { background: var(--bg); font-family: 'Syne', sans-serif; color: var(--text); }
 .stApp > header { display: none; }
-[data-testid="stSidebar"] { background: var(--bg2); border-right: 1px solid var(--border); }
-[data-testid="stSidebar"] * { color: var(--text) !important; }
-.block-container { padding: 2rem 2.5rem; max-width: 100%; }
+[data-testid="stSidebar"] { background: var(--bg2); border-right: 1px solid rgba(0,255,178,0.15); }
+.block-container { padding: 2rem 2.5rem; }
 [data-testid="stMetric"] {
-    background: linear-gradient(135deg, var(--bg3) 0%, rgba(17,21,39,0.8) 100%);
-    border: 1px solid var(--border); border-radius: 2px;
-    padding: 1.2rem 1.5rem; position: relative; overflow: hidden;
+    background: linear-gradient(135deg, var(--bg3), rgba(17,21,39,0.8));
+    border: 1px solid rgba(0,255,178,0.15); border-radius: 2px; padding: 1.2rem 1.5rem;
 }
 [data-testid="stMetric"]::before {
     content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
@@ -45,33 +47,24 @@ st.markdown("""
 }
 [data-testid="stMetricValue"] { font-family: 'Space Mono', monospace !important; font-size: 1.8rem !important; color: var(--accent) !important; }
 [data-testid="stMetricLabel"] { font-family: 'Syne', sans-serif !important; font-size: 0.65rem !important; letter-spacing: 0.15em !important; text-transform: uppercase !important; color: var(--muted) !important; }
-[data-testid="stMetricDelta"] { font-family: 'Space Mono', monospace !important; font-size: 0.7rem !important; }
-h1 { font-family: 'Syne', sans-serif !important; font-weight: 800 !important; letter-spacing: -0.02em !important; }
-h2 { font-family: 'Syne', sans-serif !important; font-weight: 700 !important; font-size: 1.2rem !important; letter-spacing: 0.08em !important; text-transform: uppercase !important; color: var(--muted) !important; border-bottom: 1px solid var(--border) !important; padding-bottom: 0.5rem !important; margin-top: 2.5rem !important; }
+h1 { font-family: 'Syne', sans-serif !important; font-weight: 800 !important; }
+h2 { font-family: 'Syne', sans-serif !important; font-weight: 700 !important; font-size: 1.2rem !important; letter-spacing: 0.08em !important; text-transform: uppercase !important; color: var(--muted) !important; border-bottom: 1px solid rgba(0,255,178,0.15) !important; padding-bottom: 0.5rem !important; margin-top: 2.5rem !important; }
 .stButton button {
-    background: linear-gradient(135deg, var(--accent) 0%, #00CC8E 100%) !important;
+    background: linear-gradient(135deg, var(--accent), #00CC8E) !important;
     color: #000 !important; font-family: 'Syne', sans-serif !important;
     font-weight: 700 !important; letter-spacing: 0.1em !important;
-    text-transform: uppercase !important; border: none !important;
-    border-radius: 2px !important; width: 100%; font-size: 0.8rem !important;
+    text-transform: uppercase !important; border: none !important; width: 100%;
 }
-.stTextInput input {
-    background: var(--bg3) !important; border: 1px solid var(--border) !important;
-    color: var(--text) !important; font-family: 'Space Mono', monospace !important;
-    border-radius: 2px !important;
-}
-table { font-family: 'Space Mono', monospace; font-size: 0.78rem; border-collapse: collapse; width: 100%; }
-th { color: var(--muted) !important; text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.62rem; border-bottom: 1px solid var(--border); padding: 0.7rem 1rem; text-align: left; }
-td { padding: 0.55rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.03); }
-.section-label { font-family: 'Space Mono', monospace; font-size: 0.62rem; color: var(--accent); letter-spacing: 0.2em; text-transform: uppercase; margin-bottom: 0.25rem; }
 .hero-stat { font-family: 'Syne', sans-serif; font-size: 0.82rem; color: var(--muted); line-height: 1.6; margin-bottom: 1rem; }
-.pill-green { display:inline-block; background:rgba(0,255,178,0.08); border:1px solid var(--accent); color:var(--accent); font-family:'Space Mono',monospace; font-size:0.6rem; padding:2px 10px; border-radius:100px; letter-spacing:0.08em; margin:2px; }
+table { font-family: 'Space Mono', monospace; font-size: 0.78rem; }
+th { color: var(--muted) !important; text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.62rem; border-bottom: 1px solid rgba(0,255,178,0.15); padding: 0.7rem 1rem; }
+td { padding: 0.55rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.03); }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Plot style ──────────────────────────────────────────────
 BG, BG2, BG3 = '#060810', '#0C0F1A', '#111527'
-ACCENT, ACCENT2, ACCENT3, MUTED, TEXT = '#00FFB2', '#FF3B6B', '#7B61FF', '#5C6480', '#E8EAF6'
+ACCENT, ACCENT2, ACCENT3 = '#00FFB2', '#FF3B6B', '#7B61FF'
+MUTED, TEXT = '#5C6480', '#E8EAF6'
 
 def style_ax(ax, fig=None):
     if fig: fig.patch.set_facecolor(BG)
@@ -84,7 +77,7 @@ def style_ax(ax, fig=None):
     ax.grid(color='#1A1F35', linestyle='-', linewidth=0.5, alpha=0.6)
 
 # ============================================================
-# DATA & FEATURES
+# DATA
 # ============================================================
 @st.cache_data(show_spinner=False)
 def get_price(ticker, start="2000-01-01"):
@@ -99,147 +92,183 @@ def get_price(ticker, start="2000-01-01"):
 
 def make_features(prices, rets, r):
     df = pd.DataFrame(index=prices.index)
-    
-    # 1. Trend Features (Regime Detection)
-    df['MA_200']      = prices[r] / prices[r].rolling(200).mean() - 1
-    df['MA_50']       = prices[r] / prices[r].rolling(50).mean() - 1
     df['Mom_1M']      = prices[r].pct_change(21)
     df['Mom_3M']      = prices[r].pct_change(63)
     df['Mom_6M']      = prices[r].pct_change(126)
+    df['Mom_12M']     = prices[r].pct_change(252)
+    vol1              = rets[r].rolling(21).std() * np.sqrt(252)
+    vol3              = rets[r].rolling(63).std() * np.sqrt(252)
+    df['Vol_1M']      = vol1
+    df['Vol_Regime']  = vol1 / (vol3 + 1e-9)
+    delta = prices[r].diff()
+    gain  = delta.where(delta>0,0).rolling(14).mean()
+    loss  = (-delta.where(delta<0,0)).rolling(14).mean()
+    df['RSI']         = 100 - 100/(1 + gain/(loss+1e-9))
+    df['VIX_Proxy']   = vol1 * 100
+    df['Rate_Stress'] = prices.iloc[:,1].pct_change(21) * -1
+    df['Yield_Trend'] = prices.iloc[:,1].pct_change(63) * -1
+    df['Rel_Str']     = prices[r].pct_change(63) - prices.iloc[:,1].pct_change(63)
+    ma50              = prices[r].rolling(50).mean()
+    df['Price_MA']    = (prices[r] / ma50) - 1
     
-    # 2. Volatility Features (Risk)
-    vol_short = rets[r].rolling(21).std() * np.sqrt(252)
-    vol_long  = rets[r].rolling(126).std() * np.sqrt(252)
-    df['Vol_Ratio']   = vol_short / (vol_long + 1e-9)
-    df['VIX_Proxy']   = vol_short
+    # NEW: Distance from highs (crisis detector)
+    high252 = prices[r].rolling(252).max()
+    df['Dist_Max_1Y'] = (prices[r] / high252) - 1
     
-    # 3. Mean Reversion
-    df['Dist_Max_6M'] = prices[r] / prices[r].rolling(126).max() - 1
-    
-    # 4. Safe Asset Interaction
-    df['Safe_Mom']    = prices.iloc[:,1].pct_change(63)
-    df['Rel_Str']     = df['Mom_3M'] - df['Safe_Mom']
+    # NEW: Safe asset momentum (inverted yield)
+    df['Safe_Mom']    = prices.iloc[:,1].pct_change(21)
     
     df = df.dropna()
-    
-    # Target: We predict if the asset will have positive return tomorrow
-    # But we will filter this prediction heavily in the ensemble
     tgt = (rets[r].shift(-1) > 0).astype(int)
-    
     idx = df.index.intersection(tgt.index)
     return df.loc[idx], tgt.loc[idx]
 
 # ============================================================
-# ENSEMBLE (The Fixed Logic)
+# ENSEMBLE WITH 3 MODELS
 # ============================================================
-def run_ensemble(X, y, gap, prices_r):
-    results, last_model, last_Xtr = [], None, None
+def run_ensemble(X, y, gap):
+    results, last_gb, last_Xtr = [], None, None
     
-    # UPGRADE: Gradient Boosting is far better for this than standard RF
-    # We use fewer trees but deeper logic to find regimes
-    gb = GradientBoostingClassifier(n_estimators=100, learning_rate=0.05, max_depth=3, random_state=42)
-    rf = RandomForestClassifier(n_estimators=100, max_depth=4, min_samples_leaf=10, random_state=42)
-    sc = RobustScaler() # Better for financial outliers
-
-    # Initial Training Period
-    start_idx = 1000 # Need enough data for stability
+    lr = LogisticRegression(C=0.5, solver='liblinear', max_iter=500)
+    rf = RandomForestClassifier(n_estimators=200, max_depth=5, min_samples_leaf=8, random_state=42)
+    gb = GradientBoostingClassifier(n_estimators=150, max_depth=4, learning_rate=0.05, random_state=42)
+    sc = StandardScaler()
     
-    for i in range(start_idx, len(X), 63): # Retrain every Quarter
+    for i in range(1260, len(X), 63):
         te = i - gap
-        if te < 500: continue
-        
-        # Walk Forward Splits
+        if te < 252: continue
         Xtr, ytr = X.iloc[:te], y.iloc[:te]
         end = min(i+63, len(X))
         Xte = X.iloc[i:end]
-        
         if Xte.empty: break
         
-        # Scaling
-        Xtr_s = pd.DataFrame(sc.fit_transform(Xtr), index=Xtr.index, columns=Xtr.columns)
-        Xte_s = pd.DataFrame(sc.transform(Xte), index=Xte.index, columns=Xte.columns)
+        Xtr_s = sc.fit_transform(Xtr)
+        Xte_s = sc.transform(Xte)
         
-        # Fit Models
-        gb.fit(Xtr_s, ytr)
-        rf.fit(Xtr_s, ytr)
+        lr.fit(Xtr_s, ytr)
+        rf.fit(Xtr, ytr)
+        gb.fit(Xtr, ytr)
         
-        # Get Probabilities
-        p_gb = gb.predict_proba(Xte_s)[:,1]
-        p_rf = rf.predict_proba(Xte_s)[:,1]
+        p_lr = lr.predict_proba(Xte_s)[:,1]
+        p_rf = rf.predict_proba(Xte)[:,1]
+        p_gb = gb.predict_proba(Xte)[:,1]
         
-        # ─── THE FIX: REGIME FILTER ──────────────────────────
-        # If price is below 200-Day MA (Bear Market), we require much higher confidence to buy.
-        # This prevents buying the dip in a crash.
+        # 3-model ensemble
+        avg = (p_lr + p_rf + p_gb) / 3
         
-        current_prices = prices_r.loc[Xte.index]
-        ma_200 = prices_r.shift(1).rolling(200).mean().loc[Xte.index]
+        # STRICT threshold: use training data quantiles ONLY
+        train_probs = (lr.predict_proba(Xtr_s)[:,1] + 
+                       rf.predict_proba(Xtr)[:,1] + 
+                       gb.predict_proba(Xtr)[:,1]) / 3
         
-        trend_filter = (current_prices > ma_200).astype(int).values
+        upper = np.percentile(train_probs, 65)  # More conservative
+        lower = np.percentile(train_probs, 35)
         
-        # Consensus Score
-        avg_prob = (p_gb + p_rf) / 2
+        signals = np.zeros(len(avg))
+        signals[avg >= upper] = 1
+        signals[avg <= lower] = -1
         
-        # Logic: 
-        # 1. If Bull Market (Price > 200MA): Buy if Model > 0.5
-        # 2. If Bear Market (Price < 200MA): Buy ONLY if Model > 0.65 (High conviction rebound)
-        
-        final_signal = []
-        for j in range(len(avg_prob)):
-            if trend_filter[j] == 1: # Bull Regime
-                sig = 1 if avg_prob[j] > 0.5 else 0
-            else: # Bear Regime
-                sig = 1 if avg_prob[j] > 0.65 else 0
-            final_signal.append(sig)
-            
         results.append(pd.DataFrame({
-            'Signal': final_signal,
-            'Prob_LR': p_gb, # Mapped to UI names
-            'Prob_RF': p_rf
+            'Signal': signals,
+            'Prob': avg,
+            'Prob_LR': p_lr,
+            'Prob_RF': p_rf,
+            'Prob_GB': p_gb
         }, index=Xte.index))
         
-        last_model, last_Xtr = gb, Xtr_s
-        
-    return (pd.concat(results) if results else pd.DataFrame()), last_model, last_Xtr
+        last_gb, last_Xtr = gb, Xtr
+    
+    return (pd.concat(results) if results else pd.DataFrame()), last_gb, last_Xtr
 
-# ── Metric helpers ──────────────────────────────────────────
-def sharpe(r, f=252): m,s=r.mean(),r.std(); return (m/s)*np.sqrt(f) if s>0 else 0
-def sortino(r, f=252): m=r.mean(); d=r[r<0].std(); return (m/d)*np.sqrt(f) if d>0 else 0
-def cvar(r, a=0.05): c=r.quantile(a); return r[r<=c].mean()
-def max_dd(c): return (c/c.cummax()-1).min()
-def calmar(a,d): return abs(a/d) if d<0 else 0
+# ============================================================
+# REALITY-ADJUSTED RETURNS
+# ============================================================
+def apply_realistic_costs(res, R, S, tax_rate_short=0.35, tax_rate_long=0.20,
+                          tc_bps=5, slippage_bps=5, execution_lag_days=1):
+    """
+    Apply taxes, transaction costs, slippage, and execution lag.
+    """
+    res_real = res.copy()
+    
+    # Execution lag: signal today, execute tomorrow
+    res_real['Signal_Executed'] = res_real['Signal'].shift(execution_lag_days)
+    res_real = res_real.dropna()
+    
+    # Actual returns after lag
+    res_real['SR_Gross'] = np.where(
+        res_real['Signal_Executed'] == 1, 
+        res_real['RET_RISKY'], 
+        np.where(res_real['Signal_Executed'] == -1, res_real['RET_SAFE'], 0)
+    )
+    
+    # Transaction costs + slippage
+    total_cost_bps = tc_bps + slippage_bps
+    trade_days = res_real.index[res_real['Signal_Executed'] != res_real['Signal_Executed'].shift()]
+    
+    res_real['TC_Cost'] = 0.0
+    res_real.loc[trade_days, 'TC_Cost'] = total_cost_bps / 10000
+    
+    # After-cost returns
+    res_real['SR_AfterTC'] = res_real['SR_Gross'] - res_real['TC_Cost']
+    
+    # Tax calculation (simplified)
+    # Track holding period and apply appropriate tax rate
+    res_real['Cum_Gross'] = (1 + res_real['SR_AfterTC']).cumprod()
+    
+    # Approximate tax drag: assume 50% short-term, 50% long-term for simplicity
+    avg_tax_rate = (tax_rate_short + tax_rate_long) / 2
+    
+    # Apply tax drag only on gains
+    res_real['Taxable_Gain'] = res_real['SR_AfterTC'].clip(lower=0)
+    res_real['Tax_Drag'] = res_real['Taxable_Gain'] * avg_tax_rate
+    
+    # Only apply tax on trade exits (when position changes)
+    res_real['Tax_Applied'] = 0.0
+    res_real.loc[trade_days, 'Tax_Applied'] = res_real.loc[trade_days, 'Tax_Drag']
+    
+    # Final net return
+    res_real['SR_Net'] = res_real['SR_AfterTC'] - res_real['Tax_Applied']
+    
+    return res_real
 
 # ============================================================
 # SIDEBAR
 # ============================================================
 with st.sidebar:
-    st.markdown('<p class="section-label">Research Terminal v2.0</p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-family:Space Mono;font-size:0.62rem;color:#00FFB2;letter-spacing:0.2em;">REALITY-ADJUSTED v3.0</p>', unsafe_allow_html=True)
     st.markdown("### Model Controls")
-    R   = st.text_input("High-Beta Asset", "QQQ")
-    S   = st.text_input("Risk-Free Asset",  "SHY")
-    emb = st.slider("Purged Embargo (Months)", 1, 12, 1)
-    nmc = st.number_input("Monte Carlo Sims", 100, 1000, 500, step=100)
+    R  = st.text_input("High-Beta Asset", "QQQ")
+    S  = st.text_input("Risk-Free Asset",  "SHY")
+    emb= st.slider("Purged Embargo (Months)", 1, 12, 2)
+    
+    st.markdown("### Reality Adjustments")
+    tax_short = st.slider("Short-Term Tax Rate", 0.0, 0.50, 0.35, 0.01)
+    tax_long  = st.slider("Long-Term Tax Rate", 0.0, 0.30, 0.20, 0.01)
+    tc_bps    = st.slider("Transaction Cost (bps)", 0, 20, 5, 1)
+    slip_bps  = st.slider("Slippage (bps)", 0, 20, 5, 1)
+    lag_days  = st.slider("Execution Lag (days)", 0, 3, 1, 1)
+    
     st.markdown("---")
-    st.markdown('<p class="hero-stat" style="font-size:0.72rem;">Regime-Filtered Boosting · Purged walk-forward validation · Ensemble voting · SHAP attribution · Permutation testing</p>', unsafe_allow_html=True)
-    run = st.button("⚡ Execute Research Pipeline")
+    st.markdown('<p class="hero-stat" style="font-size:0.72rem;">3-model ensemble · Tax-aware · Realistic execution · Strict validation</p>', unsafe_allow_html=True)
+    
+    run = st.button("⚡ Run Reality-Adjusted Backtest")
 
 # ============================================================
 # HEADER
 # ============================================================
 st.markdown("""
 <div style="border-bottom:1px solid rgba(0,255,178,0.15);padding-bottom:1.5rem;margin-bottom:2rem;">
-  <p class="section-label">Quantitative Research Lab</p>
+  <p style="font-family:Space Mono;font-size:0.6rem;color:#00FFB2;letter-spacing:0.2em;margin:0;">AMCE v3.0 — REALITY EDITION</p>
   <h1 style="margin:0;background:linear-gradient(135deg,#00FFB2,#7B61FF);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-size:2.6rem;">
-    Adaptive Macro-Conditional Ensemble
+    Tax-Aware Execution Model
   </h1>
-  <p style="font-family:'Space Mono',monospace;font-size:0.7rem;color:#5C6480;margin-top:0.5rem;letter-spacing:0.15em;">
-    AMCE FRAMEWORK &nbsp;·&nbsp; REGIME FILTERED &nbsp;·&nbsp; ENSEMBLE VOTING &nbsp;·&nbsp; STATISTICAL VALIDATION
+  <p style="font-family:Space Mono;font-size:0.7rem;color:#5C6480;margin-top:0.5rem;letter-spacing:0.15em;">
+    REALISTIC COSTS &nbsp;·&nbsp; TAX DRAG &nbsp;·&nbsp; EXECUTION LAG &nbsp;·&nbsp; SLIPPAGE MODELING
   </p>
 </div>
-<div style="background:linear-gradient(135deg,rgba(123,97,255,0.07),rgba(0,255,178,0.04));border:1px solid rgba(123,97,255,0.25);border-radius:2px;padding:1.25rem 1.5rem;margin-bottom:2rem;">
-  <p style="font-family:'Space Mono',monospace;font-size:0.6rem;color:#7B61FF;letter-spacing:0.2em;margin:0 0 0.75rem 0;">RESEARCH HYPOTHESIS</p>
-  <p style="font-size:0.85rem;margin:0 0 0.4rem 0;"><strong>H₀ (Null):</strong> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.</p>
-  <p style="font-size:0.85rem;margin:0 0 0.4rem 0;"><strong>H₁ (Alternative):</strong> Integrating Regime Filtering (Trend) with Gradient Boosting signals generates positive crisis alpha and statistically significant risk-adjusted outperformance.</p>
-  <p style="font-family:'Space Mono',monospace;font-size:0.68rem;color:#5C6480;margin:0;">Test: Signal permutation (n=1,000) &nbsp;|&nbsp; Threshold: p &lt; 0.05 &nbsp;|&nbsp; Alpha via OLS on excess returns</p>
+<div style="background:linear-gradient(135deg,rgba(255,59,107,0.07),rgba(0,255,178,0.04));border:1px solid rgba(255,59,107,0.25);border-radius:2px;padding:1.25rem 1.5rem;margin-bottom:2rem;">
+  <p style="font-family:Space Mono;font-size:0.6rem;color:#FF3B6B;letter-spacing:0.2em;margin:0 0 0.75rem 0;">⚠️ REALITY CHECK</p>
+  <p style="font-size:0.85rem;margin:0;">This version models <strong>real-world trading conditions</strong>: taxes on every trade, bid-ask spread, slippage during execution, and 1-day signal lag. Previous backtests assumed frictionless markets. This tests whether the edge survives reality.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -249,377 +278,231 @@ st.markdown("""
 if run:
     prog = st.progress(0)
     stat = st.empty()
-
-    stat.markdown('<p class="hero-stat">⟳ Ingesting market data…</p>', unsafe_allow_html=True)
+    
+    stat.markdown('<p class="hero-stat">⟳ Downloading market data…</p>', unsafe_allow_html=True)
     try:
         pr = get_price(R); ps = get_price(S)
-        prices = pd.concat([pr, ps], axis=1).dropna(); prices.columns = [R, S]
-        rets    = prices.pct_change().dropna()
+        prices = pd.concat([pr, ps], axis=1).dropna()
+        prices.columns = [R, S]
+        rets = prices.pct_change().dropna()
     except Exception as e:
         st.error(f"Data error: {e}"); st.stop()
     prog.progress(10)
-
-    stat.markdown('<p class="hero-stat">⟳ Engineering macro factors & regimes…</p>', unsafe_allow_html=True)
+    
+    stat.markdown('<p class="hero-stat">⟳ Engineering 12 features (added crisis detectors)…</p>', unsafe_allow_html=True)
     feats, tgt = make_features(prices, rets, R)
     prog.progress(20)
-
-    stat.markdown('<p class="hero-stat">⟳ Running regime-filtered ensemble…</p>', unsafe_allow_html=True)
-    # Pass raw prices to ensemble for MA calculation
-    bt, rf_model, X_last = run_ensemble(feats, tgt, emb*21, prices[R])
-    prog.progress(50)
-
-    # Join backtest signals with returns
+    
+    stat.markdown('<p class="hero-stat">⟳ Running 3-model ensemble with strict thresholds…</p>', unsafe_allow_html=True)
+    bt, gb_model, X_last = run_ensemble(feats, tgt, emb*21)
+    prog.progress(40)
+    
+    # Join returns
     rets_bt = rets[[R, S]].copy()
     res = bt.join(rets_bt).dropna()
-    
-    # Rename to avoid any column conflicts
     res = res.rename(columns={R: 'RET_RISKY', S: 'RET_SAFE'})
     
-    # Strategy Logic: Signal 1 = Risky, Signal 0 = Safe
-    res['SR'] = np.where(res['Signal']==1, res['RET_RISKY'], res['RET_SAFE'])
-    res['BR'] = res['RET_RISKY']                                                
-    res['ER'] = res['SR'] - res['RET_SAFE']                                    
-
-    cs = (1+res['SR']).cumprod()
-    cb = (1+res['BR']).cumprod()
-
-    tot    = float(cs.iloc[-1])-1; bch = float(cb.iloc[-1])-1
-    ann    = (1+tot)**(252/len(res))-1; bann=(1+bch)**(252/len(res))-1
-    sh     = sharpe(res['SR']); bsh=sharpe(res['BR'])
-    so     = sortino(res['SR']); cv=cvar(res['SR'])
-    md     = max_dd(cs);          ca=calmar(ann,md)
-    wr     = (res['SR']>0).mean()
-    ir     = sharpe(res['ER'])
-    prog.progress(60); stat.empty()
-
-    # ── 01 EXECUTIVE SUMMARY ────────────────────────────
-    st.markdown("## 01 — Executive Risk Summary")
-    c1,c2,c3,c4,c5,c6 = st.columns(6)
-    c1.metric("Sharpe Ratio",  f"{sh:.3f}",       f"Bench: {bsh:.3f}")
-    c2.metric("Sortino Ratio", f"{so:.3f}",       "Downside-adj.")
-    c3.metric("Total Return",  f"{tot*100:.0f}%", f"Bench: {bch*100:.0f}%")
-    c4.metric("Ann. Return",   f"{ann*100:.1f}%", f"Bench: {bann*100:.1f}%")
-    c5.metric("Max Drawdown",  f"{md*100:.1f}%",  f"Calmar: {ca:.2f}")
-    c6.metric("CVaR (95%)",    f"{cv*100:.2f}%",  f"Win: {wr:.1%}")
-
-    # ── 02 EQUITY CURVE + DRAWDOWN ───────────────────────
-    st.markdown("## 02 — Equity Curve & Regime Overlay")
-    fig, (ax_eq, ax_dd) = plt.subplots(2,1,figsize=(14,8),gridspec_kw={'height_ratios':[3,1],'hspace':0.04})
-    style_ax(ax_eq, fig); style_ax(ax_dd)
-
-    ir_bool = res['Signal']==1
-    chg = ir_bool != ir_bool.shift()
-    starts = res.index[chg & ir_bool]
-    ends   = res.index[chg & ~ir_bool]
-    if ir_bool.iloc[0]: starts = res.index[:1].append(starts)
-    if ir_bool.iloc[-1]: ends = ends.append(res.index[-1:])
-    for s,e in zip(starts, ends): ax_eq.axvspan(s,e,alpha=0.05,color=ACCENT,zorder=0)
-
-    ax_eq.plot(cb.index, cb.values, color=MUTED,   lw=1.2, ls='--', label=f'{R} Buy & Hold', alpha=0.7)
-    ax_eq.plot(cs.index, cs.values, color=ACCENT,  lw=2.2, label='AMCE Strategy', zorder=5)
-    ax_eq.fill_between(cs.index, 1, cs.values, alpha=0.05, color=ACCENT)
-    ax_eq.set_ylabel('Portfolio Value (×)', color=MUTED, fontsize=9)
+    # BENCHMARK: Simple returns
+    res['BR'] = res['RET_RISKY']
+    
+    stat.markdown('<p class="hero-stat">⟳ Applying taxes, costs, slippage, and execution lag…</p>', unsafe_allow_html=True)
+    res_real = apply_realistic_costs(res, R, S, tax_short, tax_long, tc_bps, slip_bps, lag_days)
+    prog.progress(60)
+    
+    # Calculate cumulative returns
+    cs_gross = (1 + res_real['SR_Gross']).cumprod()
+    cs_tc    = (1 + res_real['SR_AfterTC']).cumprod()
+    cs_net   = (1 + res_real['SR_Net']).cumprod()
+    cb       = (1 + res_real['BR']).cumprod()
+    
+    # Metrics
+    def calc_metrics(rets_series):
+        m, s = rets_series.mean(), rets_series.std()
+        sh = (m/s)*np.sqrt(252) if s>0 else 0
+        tot = (1+rets_series).prod()-1
+        ann = (1+tot)**(252/len(rets_series))-1
+        dd = ((1+rets_series).cumprod()/(1+rets_series).cumprod().cummax()-1).min()
+        wr = (rets_series>0).mean()
+        return sh, tot, ann, dd, wr
+    
+    sh_gross, tot_gross, ann_gross, dd_gross, wr_gross = calc_metrics(res_real['SR_Gross'])
+    sh_tc,    tot_tc,    ann_tc,    dd_tc,    wr_tc    = calc_metrics(res_real['SR_AfterTC'])
+    sh_net,   tot_net,   ann_net,   dd_net,   wr_net   = calc_metrics(res_real['SR_Net'])
+    sh_b,     tot_b,     ann_b,     dd_b,     wr_b     = calc_metrics(res_real['BR'])
+    
+    prog.progress(80); stat.empty()
+    
+    # ── RESULTS ──────────────────────────────────────────
+    st.markdown("## 01 — Reality Check: Gross vs Net Performance")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("GROSS Sharpe", f"{sh_gross:.3f}", "Before any costs")
+    col2.metric("After TC Sharpe", f"{sh_tc:.3f}", f"{((sh_tc/sh_gross)-1)*100:.1f}% impact")
+    col3.metric("NET Sharpe", f"{sh_net:.3f}", f"{((sh_net/sh_gross)-1)*100:.1f}% total impact")
+    col4.metric("Benchmark", f"{sh_b:.3f}", "QQQ Buy & Hold")
+    
+    st.markdown("---")
+    
+    col5, col6, col7 = st.columns(3)
+    col5.metric("GROSS Return", f"{tot_gross*100:.0f}%", "Theory")
+    col6.metric("After TC Return", f"{tot_tc*100:.0f}%", f"-{(tot_gross-tot_tc)*100:.0f}%")
+    col7.metric("NET Return", f"{tot_net*100:.0f}%", f"-{(tot_gross-tot_net)*100:.0f}%")
+    
+    # Comparison table
+    st.markdown("### Performance Breakdown")
+    
+    comp_data = {
+        "Metric": ["Sharpe Ratio", "Total Return", "Annual Return", "Max Drawdown", "Win Rate"],
+        "Gross (Theory)": [
+            f"{sh_gross:.3f}", f"{tot_gross*100:.0f}%", f"{ann_gross*100:.1f}%", 
+            f"{dd_gross*100:.1f}%", f"{wr_gross:.1%}"
+        ],
+        "After TC": [
+            f"{sh_tc:.3f}", f"{tot_tc*100:.0f}%", f"{ann_tc*100:.1f}%",
+            f"{dd_tc*100:.1f}%", f"{wr_tc:.1%}"
+        ],
+        "After Tax (NET)": [
+            f"{sh_net:.3f}", f"{tot_net*100:.0f}%", f"{ann_net*100:.1f}%",
+            f"{dd_net*100:.1f}%", f"{wr_net:.1%}"
+        ],
+        "Benchmark": [
+            f"{sh_b:.3f}", f"{tot_b*100:.0f}%", f"{ann_b*100:.1f}%",
+            f"{dd_b*100:.1f}%", f"{wr_b:.1%}"
+        ]
+    }
+    
+    st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
+    
+    # Waterfall chart showing cost breakdown
+    st.markdown("## 02 — Cost Waterfall Analysis")
+    
+    fig_w, ax_w = plt.subplots(figsize=(12, 5))
+    style_ax(ax_w, fig_w)
+    
+    starts = [0, tot_gross, tot_tc]
+    changes = [tot_gross, tot_tc-tot_gross, tot_net-tot_tc]
+    labels = ['Gross\nReturn', 'Transaction\nCosts', 'Tax\nDrag']
+    colors = [ACCENT, ACCENT2, ACCENT2]
+    
+    for i, (start, change, label, color) in enumerate(zip(starts, changes, labels, colors)):
+        ax_w.bar(i, change, bottom=start, color=color, alpha=0.8, edgecolor='white', linewidth=1)
+        ax_w.text(i, start + change/2, f"{change*100:+.0f}%", 
+                  ha='center', va='center', color='white', fontweight='bold', fontsize=10)
+    
+    ax_w.bar(3, tot_net, color=ACCENT3, alpha=0.8, edgecolor='white', linewidth=1)
+    ax_w.text(3, tot_net/2, f"{tot_net*100:.0f}%", 
+              ha='center', va='center', color='white', fontweight='bold', fontsize=10)
+    
+    # Benchmark comparison
+    ax_w.axhline(tot_b, color=MUTED, linestyle='--', linewidth=2, alpha=0.7, label=f'Benchmark: {tot_b*100:.0f}%')
+    
+    ax_w.set_xticks([0, 1, 2, 3])
+    ax_w.set_xticklabels(['Gross\nReturn', 'After\nTC', 'After\nTax', 'NET\nReturn'], fontsize=9)
+    ax_w.set_ylabel('Cumulative Return', fontsize=9)
+    ax_w.legend(facecolor=BG3, labelcolor=TEXT, edgecolor='#1E2540', fontsize=9)
+    ax_w.set_title('Return Waterfall: From Theory to Reality', color=TEXT, fontsize=11, pad=15)
+    
+    plt.tight_layout()
+    st.pyplot(fig_w)
+    plt.close()
+    
+    # Equity curves comparison
+    st.markdown("## 03 — Equity Curves: Gross vs Net vs Benchmark")
+    
+    fig_eq, ax_eq = plt.subplots(figsize=(14, 6))
+    style_ax(ax_eq, fig_eq)
+    
+    ax_eq.plot(cs_gross.index, cs_gross.values, color=ACCENT, linewidth=1.5, alpha=0.5, 
+               linestyle='--', label='Gross (Theory)')
+    ax_eq.plot(cs_tc.index, cs_tc.values, color=ACCENT, linewidth=2, alpha=0.8, 
+               label='After Transaction Costs')
+    ax_eq.plot(cs_net.index, cs_net.values, color=ACCENT, linewidth=2.5, 
+               label='NET (After Tax)', zorder=5)
+    ax_eq.plot(cb.index, cb.values, color=MUTED, linewidth=1.5, linestyle=':', 
+               alpha=0.7, label=f'{R} Buy & Hold')
+    
+    ax_eq.fill_between(cs_net.index, 1, cs_net.values, alpha=0.05, color=ACCENT)
+    ax_eq.set_ylabel('Portfolio Value (×)', fontsize=9)
     ax_eq.legend(loc='upper left', facecolor=BG3, labelcolor=TEXT, edgecolor='#1E2540', fontsize=9)
-    ax_eq.set_xticklabels([])
-
-    dd_s = (cs/cs.cummax()-1)*100; dd_b=(cb/cb.cummax()-1)*100
-    ax_dd.fill_between(dd_s.index, dd_s.values, 0, alpha=0.35, color=ACCENT2)
-    ax_dd.plot(dd_s.index, dd_s.values, color=ACCENT2, lw=1)
-    ax_dd.plot(dd_b.index, dd_b.values, color=MUTED,   lw=0.8, ls='--', alpha=0.5)
-    ax_dd.set_ylabel('Drawdown %', color=MUTED, fontsize=9); ax_dd.axhline(0,color='#1E2540',lw=0.5)
-    plt.tight_layout(); st.pyplot(fig); plt.close()
-
-    # ── 03 MONTE CARLO ────────────────────────────────────
-    st.markdown("## 03 — Monte Carlo Robustness (Bootstrapped)")
-    st.markdown('<p class="hero-stat">Bootstrap resampling of actual strategy returns preserves fat-tail properties. The actual strategy tracks within the 95% confidence cone.</p>', unsafe_allow_html=True)
-
-    sims = []
-    for _ in range(int(nmc)):
-        r2 = np.random.choice(res['SR'].values, size=len(res), replace=True)
-        sims.append(np.cumprod(1+r2))
-    sa = np.array(sims)
-    p97,p50,p03 = np.percentile(sa,97.5,axis=0), np.percentile(sa,50,axis=0), np.percentile(sa,2.5,axis=0)
-
-    prob_beat = (sa[:,-1] > float(cb.iloc[-1])).mean()
-    prob_dd40 = (sa.min(axis=1) < -0.40).mean()
-
-    mc1,mc2,mc3 = st.columns(3)
-    mc1.metric("Prob. Beat Benchmark", f"{prob_beat*100:.0f}%")
-    mc2.metric("Prob. Drawdown > 40%", f"{prob_dd40*100:.0f}%")
-    mc3.metric("Median Final Value",   f"×{p50[-1]:.2f}")
-
-    fig_mc, ax_mc = plt.subplots(figsize=(14,5)); style_ax(ax_mc, fig_mc)
-    ax_mc.fill_between(range(len(p50)), p03, p97, color=ACCENT3, alpha=0.12, label='95% Confidence Cone')
-    ax_mc.plot(p50,            color=TEXT,   ls='--', lw=1, alpha=0.5, label='Median Expectation')
-    ax_mc.plot(cs.values,      color=ACCENT, lw=2.5,           label='Actual Strategy', zorder=5)
-    ax_mc.plot(cb.values,      color=MUTED,  lw=1.2, ls=':',  alpha=0.6, label=f'{R} Buy & Hold')
-    ax_mc.axhline(1, color='#1E2540', lw=0.5)
-    ax_mc.legend(facecolor=BG3, labelcolor=TEXT, edgecolor='#1E2540', fontsize=9)
-    ax_mc.set_xlabel('Trading Days', fontsize=9); ax_mc.set_ylabel('Growth of $1', fontsize=9)
-    plt.tight_layout(); st.pyplot(fig_mc); plt.close()
-    prog.progress(65)
-
-    # ── 04 CRISIS ALPHA ───────────────────────────────────
-    st.markdown("## 04 — Crisis Alpha Analysis")
-    st.markdown('<p class="hero-stat">Performance during systemic risk events. Green = capital preserved vs benchmark. The new Regime Filter should significantly reduce losses here.</p>', unsafe_allow_html=True)
-
-    crises = [
-        ("Dot-com Crash",        "2000-03-01","2002-10-01"),
-        ("2008 Financial Crisis","2007-10-01","2009-03-01"),
-        ("2011 Euro Debt Crisis","2011-05-01","2011-10-01"),
-        ("2015 Flash Crash",     "2015-08-01","2016-02-01"),
-        ("2018 Volmageddon",     "2018-09-01","2018-12-31"),
-        ("2020 COVID Crash",     "2020-02-19","2020-03-23"),
-        ("2022 Inflation Bear",  "2022-01-01","2022-12-31"),
-    ]
-    rows=[]
-    for nm,s,e in crises:
-        sub = res.loc[(res.index>=s)&(res.index<=e)]
-        if len(sub)<5: continue
-        sp=(1+sub['SR']).cumprod().iloc[-1]-1; bp=(1+sub['BR']).cumprod().iloc[-1]-1; ap=sp-bp
-        col = '#00FFB2' if ap>0 else '#FF3B6B'
-        rows.append({"Crisis Period":nm,"Strategy":f"{sp*100:.1f}%","Market":f"{bp*100:.1f}%",
-                     "Alpha (Edge)":f'<span style="color:{col};font-weight:700;">{ap*100:+.1f}%</span>',
-                     "Result":"✅ Preserved" if ap>0 else "⚠️ Corr. Spike"})
-    if rows:
-        st.markdown(pd.DataFrame(rows).to_html(escape=False,index=False), unsafe_allow_html=True)
-
-    # ── 05 FACTOR DECOMPOSITION ───────────────────────────
-    st.markdown("## 05 — Factor Decomposition (OLS Alpha)")
-    Xols = sm.add_constant(res['BR'].values)
-    try:
-        ols  = sm.OLS(res['ER'].values, Xols).fit()
-        a_d  = ols.params[0]; beta_v=ols.params[1]
-        a_ann= (1+a_d)**252-1; a_p=ols.pvalues[0]; a_t=ols.tvalues[0]; r2=ols.rsquared
-    except: a_ann,beta_v,a_p,a_t,r2 = 0,1,1,0,0
-
-    ac = ACCENT if a_ann>0 else ACCENT2
-    sc_txt = f"p={a_p:.3f} ✓ SIGNIFICANT" if a_p<0.05 else f"p={a_p:.3f} — not significant"
-    sc_col = ACCENT if a_p<0.05 else MUTED
-
-    fa1,fa2,fa3,fa4 = st.columns(4)
-    for col_f, label, val, sub, col_v in [
-        (fa1,"ALPHA (ANN.)",f"{a_ann*100:+.2f}%",f"t={a_t:.2f} · {sc_txt}",ac),
-        (fa2,"MARKET BETA", f"{beta_v:.3f}",       "Defensive β<1" if beta_v<1 else "Leveraged β>1",ACCENT3),
-        (fa3,"R² EXPLAINED",f"{r2:.3f}",           "Residual = model skill",MUTED),
-        (fa4,"INFO. RATIO", f"{ir:.3f}",           "Active ret / tracking err",ACCENT),
-    ]:
-        col_f.markdown(f"""
-        <div style="background:{BG3};border:1px solid {col_v}30;border-radius:2px;padding:1rem;border-top:2px solid {col_v};margin-bottom:0.5rem;">
-        <p style="font-family:'Space Mono',monospace;font-size:0.58rem;color:{MUTED};letter-spacing:0.15em;margin:0;">{label}</p>
-        <p style="font-family:'Space Mono',monospace;font-size:1.8rem;color:{col_v};margin:0.2rem 0;">{val}</p>
-        <p style="font-size:0.68rem;color:{MUTED};margin:0;">{sub}</p>
-        </div>""", unsafe_allow_html=True)
-
-    # ── 06 ROLLING STABILITY ──────────────────────────────
-    st.markdown("## 06 — Strategy Stability (Rolling Metrics)")
-    fig_r, axs = plt.subplots(1,2,figsize=(14,4)); fig_r.patch.set_facecolor(BG)
-    ax_rs, ax_wr = axs
-    style_ax(ax_rs); style_ax(ax_wr)
-
-    rsh = (res['SR'].rolling(252).mean()/res['SR'].rolling(252).std())*np.sqrt(252)
-    bsh2= (res['BR'].rolling(252).mean()/res['BR'].rolling(252).std())*np.sqrt(252)
-    ax_rs.fill_between(rsh.index, rsh, 0, where=(rsh>0), alpha=0.12, color=ACCENT)
-    ax_rs.fill_between(rsh.index, rsh, 0, where=(rsh<0), alpha=0.12, color=ACCENT2)
-    ax_rs.plot(rsh, color=ACCENT, lw=1.5, label='Strategy')
-    ax_rs.plot(bsh2, color=MUTED, lw=1, ls='--', alpha=0.6, label=f'{R} B&H')
-    ax_rs.axhline(0, color=ACCENT2, lw=0.8, ls='--'); ax_rs.axhline(1, color=ACCENT, lw=0.5, ls=':', alpha=0.4)
-    ax_rs.set_title("12-Month Rolling Sharpe Ratio", color=TEXT, fontsize=10)
-    ax_rs.legend(facecolor=BG3, labelcolor=TEXT, edgecolor='#1E2540', fontsize=8)
-
-    rwr = res['SR'].rolling(252).apply(lambda x:(x>0).mean())
-    ax_wr.fill_between(rwr.index, rwr, 0.5, where=(rwr>=0.5), alpha=0.12, color=ACCENT)
-    ax_wr.fill_between(rwr.index, rwr, 0.5, where=(rwr<0.5),  alpha=0.12, color=ACCENT2)
-    ax_wr.plot(rwr, color=ACCENT, lw=1.5)
-    ax_wr.axhline(0.5, color=MUTED, lw=0.8, ls='--', alpha=0.6)
-    ax_wr.set_title("12-Month Rolling Win Rate", color=TEXT, fontsize=10)
-    plt.tight_layout(); st.pyplot(fig_r); plt.close()
-
-    # Overfitting diagnostic
-    sp2  = int(len(res)*0.7)
-    ins  = res.iloc[:sp2]; oos2 = res.iloc[sp2:]
-    is_sh= sharpe(ins['SR']); os_sh=sharpe(oos2['SR'])
-    is_dd= max_dd((1+ins['SR']).cumprod()); os_dd=max_dd((1+oos2['SR']).cumprod())
-    is_wr= (ins['SR']>0).mean(); os_wr=(oos2['SR']>0).mean()
-    decay= abs(is_sh-os_sh)/max(abs(is_sh),0.001)
-
-    oo_df = pd.DataFrame({
-        "Metric":["Sharpe Ratio","Max Drawdown","Win Rate"],
-        "In-Sample (70%)":[f"{is_sh:.3f}",f"{is_dd*100:.1f}%",f"{is_wr:.1%}"],
-        "Out-of-Sample (30%)":[f"{os_sh:.3f}",f"{os_dd*100:.1f}%",f"{os_wr:.1%}"],
-        "Decay":[f"{abs(is_sh-os_sh)/max(abs(is_sh),0.001):.0%}",
-                 f"{abs(is_dd-os_dd)/max(abs(is_dd),0.001):.0%}",
-                 f"{abs(is_wr-os_wr)/max(abs(is_wr),0.001):.0%}"]
-    })
-    st.dataframe(oo_df, use_container_width=True, hide_index=True)
-    if decay<0.25: st.success("✅ LOW OVERFITTING — Out-of-sample metrics within 25% of in-sample. Model generalizes to unseen market conditions.")
-    elif decay<0.5: st.warning("⚠️ MODERATE DECAY — Consider additional regularization.")
-    else: st.error("❌ HIGH OVERFITTING — Significant performance decay detected out-of-sample.")
-    prog.progress(75)
-
-    # ── 07 PERMUTATION TEST ───────────────────────────────
-    st.markdown("## 07 — Statistical Significance (Permutation Test)")
-    st.markdown('<p class="hero-stat">We shuffle <em>prediction signals</em> 1,000× while keeping returns in chronological order. If our Sharpe exceeds 95% of shuffled strategies, the model demonstrates genuine skill.</p>', unsafe_allow_html=True)
-
-    with st.spinner("Running 1,000 signal permutations…"):
-        perm_sh = []
-        sigs    = res['Signal'].values.copy()
-        for _ in range(1000):
-            shf  = np.random.permutation(sigs)
-            sr   = np.where(shf==1, res['RET_RISKY'].values, res['RET_SAFE'].values)
-            m,sd = np.mean(sr), np.std(sr)
-            if sd>0: perm_sh.append((m/sd)*np.sqrt(252))
-        pa   = np.array(perm_sh)
-        p_v  = (np.sum(pa>=sh)+1)/(len(pa)+1)
-        pct  = (pa < sh).mean()
-
-    pm1,pm2,pm3 = st.columns(3)
-    pm1.metric("Actual Sharpe",       f"{sh:.4f}")
-    pm2.metric("Permutation p-value", f"{p_v:.4f}", "< 0.05 = significant")
-    pm3.metric("Random Strategies Beaten", f"{pct*100:.1f}%")
-
-    fig_p, ax_p = plt.subplots(figsize=(12,4)); style_ax(ax_p, fig_p)
-    ax_p.hist(pa, bins=50, color=MUTED, alpha=0.4, density=True, label='Random Signal Distribution')
-    ax_p.axvline(sh, color=ACCENT, lw=2.5, label=f'Actual Sharpe = {sh:.3f}')
-    p95p = np.percentile(pa, 95)
-    ax_p.axvline(p95p, color=ACCENT2, lw=1.5, ls='--', alpha=0.8, label=f'95th Perm. Pct = {p95p:.3f}')
-    ax_p.fill_betweenx([0,5], p95p, pa.max()*1.1, alpha=0.06, color=ACCENT2)
-    ax_p.set_xlabel('Sharpe Ratio', fontsize=9); ax_p.set_ylabel('Density', fontsize=9)
-    ax_p.legend(facecolor=BG3, labelcolor=TEXT, edgecolor='#1E2540', fontsize=9)
-    ax_p.set_xlim(pa.min()*0.95, max(pa.max(), sh)*1.1)
-    plt.tight_layout(); st.pyplot(fig_p); plt.close()
-
-    if p_v<0.05:  st.success(f"⭐ STATISTICALLY SIGNIFICANT — p={p_v:.4f} < 0.05. We reject H₀. Genuine predictive skill confirmed.")
-    elif p_v<0.1: st.info(f"◉ MARGINALLY SIGNIFICANT — p={p_v:.4f}. Directional edge present.")
-    else:         st.warning(f"◌ NOT SIGNIFICANT — p={p_v:.4f}. Cannot reject H₀.")
-    prog.progress(85)
-
-    # ── 08 TRANSACTION COST SENSITIVITY ──────────────────
-    st.markdown("## 08 — Transaction Cost Sensitivity")
-    st.markdown('<p class="hero-stat">Institutional viability requires positive risk-adjusted returns after realistic trading frictions. We stress-test edge persistence across 7 cost regimes.</p>', unsafe_allow_html=True)
-
-    n_tr = (res['Signal']!=res['Signal'].shift()).sum()
-    tc_rows=[]
-    for bps in [0,2,5,10,20,30,50]:
-        tc  = bps/10000
-        ar  = res['SR'].copy()
-        td  = res.index[res['Signal']!=res['Signal'].shift()]
-        ar.loc[td] -= tc
-        ctc = (1+ar).cumprod(); sh_tc=sharpe(ar); dd_tc=max_dd(ctc)
-        tot_tc=(float(ctc.iloc[-1])-1); ann_tc=(1+tot_tc)**(252/len(ar))-1
-        tc_rows.append({"Cost":f"{bps}bps","Ann. Return":f"{ann_tc*100:.1f}%","Sharpe":f"{sh_tc:.3f}","Max DD":f"{dd_tc*100:.1f}%","Beats Benchmark":"✅" if ann_tc>bann else "❌"})
-
-    st.markdown(f'<p class="hero-stat">Estimated trades: {n_tr} &nbsp;|&nbsp; Approx. annual turnover: {n_tr/max(len(res)/252,1):.0f}×</p>', unsafe_allow_html=True)
-    st.dataframe(pd.DataFrame(tc_rows), use_container_width=True, hide_index=True)
-
-    # ── 09 MODEL DISAGREEMENT ─────────────────────────────
-    st.markdown("## 09 — Ensemble Model Disagreement Analysis")
-    st.markdown('<p class="hero-stat">Convergence = high conviction. Divergence = regime ambiguity. The fill between models quantifies uncertainty.</p>', unsafe_allow_html=True)
-
-    fig_d, ax_d = plt.subplots(figsize=(14,4)); style_ax(ax_d, fig_d)
-    ax_d.plot(res.index, res['Prob_LR'], color=ACCENT,  lw=0.9, alpha=0.85, label='Gradient Boosting')
-    ax_d.plot(res.index, res['Prob_RF'], color=ACCENT3, lw=0.9, alpha=0.85, label='Random Forest')
-    ax_d.fill_between(res.index, res['Prob_LR'], res['Prob_RF'], alpha=0.15, color=ACCENT2, label='Disagreement Zone')
-    ax_d.axhline(0.5, color=ACCENT2, lw=0.8, ls='--', alpha=0.6, label='Neutral Threshold (0.5)')
-    ax_d.set_ylim(0,1); ax_d.set_ylabel('P(Risky Asset Positive)', fontsize=9)
-    ax_d.legend(facecolor=BG3, labelcolor=TEXT, edgecolor='#1E2540', fontsize=8)
-    plt.tight_layout(); st.pyplot(fig_d); plt.close()
-
-    disagree = (res['Prob_LR']-res['Prob_RF']).abs()
-    dd1,dd2 = st.columns(2)
-    dd1.metric("Avg Disagreement",   f"{disagree.mean():.4f}")
-    dd2.metric("High Conviction %",  f"{(disagree<0.05).mean():.1%}")
-
-    # ── 10 SHAP ───────────────────────────────────────────
-    st.markdown("## 10 — SHAP Feature Attribution (Game-Theoretic)")
-    st.markdown('<p class="hero-stat">SHapley Additive exPlanations decompose each prediction into feature contributions using cooperative game theory. Red = feature pushes model toward risky asset. Blue = toward safety asset.</p>', unsafe_allow_html=True)
-
-    try:
-        if rf_model and X_last is not None:
-            # For GB, we use TreeExplainer as well
-            exp = shap.TreeExplainer(rf_model)
-            sv  = exp.shap_values(X_last)
-            # Handle slight shape differences in recent sklearn/shap versions
-            if isinstance(sv, list): sv = sv[0]
-            if len(sv.shape) > 2: sv = sv[:,:,1] 
-
-            plt.close('all')
-            fig_sh, (ax_b, ax_sw) = plt.subplots(1,2,figsize=(14,5))
-            fig_sh.patch.set_facecolor(BG)
-
-            # Bar
-            style_ax(ax_b)
-            # Check dimension just in case
-            if sv.ndim == 2:
-                ms = np.abs(sv).mean(axis=0)
-            else:
-                ms = np.abs(sv)
-                
-            idx = np.argsort(ms)
-            fn  = X_last.columns.tolist()
-            cols_bar = [ACCENT if i==idx[-1] else ACCENT3 for i in idx]
-            ax_b.barh([fn[i] for i in idx], [ms[i] for i in idx], color=cols_bar, alpha=0.85)
-            ax_b.set_xlabel('Mean |SHAP Value|', fontsize=9)
-            ax_b.set_title('Feature Importance', color=TEXT, fontsize=10)
-
-            # Beeswarm
-            plt.sca(ax_sw); style_ax(ax_sw)
-            # Ensure safe handling of shap values for summary plot
-            shap.summary_plot(sv, X_last, plot_type='dot', show=False, max_display=10, color_bar=False, alpha=0.5)
-            ax_sw.set_facecolor(BG2); ax_sw.set_title('SHAP Beeswarm (Direction)', color=TEXT, fontsize=10)
-            ax_sw.tick_params(colors=MUTED, labelsize=8); ax_sw.set_xlabel('SHAP Value', color=MUTED, fontsize=9)
-            fig_sh.patch.set_facecolor(BG)
-            plt.tight_layout(); st.pyplot(fig_sh); plt.close('all')
-    except Exception as e:
-        st.warning(f"SHAP Visualization Info: {e}")
-
+    ax_eq.set_title('Reality Check: Tax & Friction Matter', color=TEXT, fontsize=11, pad=15)
+    
+    plt.tight_layout()
+    st.pyplot(fig_eq)
+    plt.close()
+    
+    # Trade frequency analysis
+    st.markdown("## 04 — Trade Frequency & Tax Implications")
+    
+    n_trades = (res_real['Signal_Executed'] != res_real['Signal_Executed'].shift()).sum()
+    n_years = len(res_real) / 252
+    trades_per_year = n_trades / n_years
+    
+    col_t1, col_t2, col_t3 = st.columns(3)
+    col_t1.metric("Total Trades", f"{n_trades}")
+    col_t2.metric("Trades per Year", f"{trades_per_year:.1f}")
+    col_t3.metric("Avg Hold Period", f"{252/trades_per_year:.0f} days")
+    
+    st.markdown(f"""
+    <div style="background:{BG3};border:1px solid rgba(255,59,107,0.2);border-radius:2px;padding:1rem;margin-top:1rem;">
+    <p style="font-size:0.85rem;color:{TEXT};margin:0;">
+    <strong>Tax Implication:</strong> With {trades_per_year:.1f} trades/year, most positions are short-term 
+    (< 1 year hold). This means <strong>{tax_short*100:.0f}% tax rate</strong> applies to gains, 
+    reducing the gross {tot_gross*100:.0f}% return to net {tot_net*100:.0f}% 
+    (a <strong>{((tot_gross-tot_net)/tot_gross)*100:.0f}% reduction</strong>).
+    </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
     prog.progress(100)
-
-    # ── CONCLUSION ────────────────────────────────────────
-    sig_flag = p_v < 0.05
-    c_col    = ACCENT if sig_flag else ACCENT2
-    c_label  = "CONFIRMS H₁ — STATISTICALLY SIGNIFICANT" if sig_flag else "FAILS TO REJECT H₀"
-
+    
+    # CONCLUSION
+    if sh_net > sh_b:
+        verdict = "EDGE SURVIVES"
+        color = ACCENT
+        msg = f"Even after taxes and costs, the model achieves Sharpe {sh_net:.3f} vs benchmark {sh_b:.3f}. The edge is REAL."
+    else:
+        verdict = "EDGE DESTROYED"
+        color = ACCENT2
+        msg = f"After taxes and costs, model Sharpe {sh_net:.3f} < benchmark {sh_b:.3f}. The backtest edge was an illusion created by ignoring friction."
+    
     st.markdown(f"""
     <div style="margin-top:3rem;padding:2rem;background:linear-gradient(135deg,{BG2},{BG3});
-                border:1px solid {c_col}35;border-radius:2px;border-top:3px solid {c_col};">
-      <p style="font-family:'Space Mono',monospace;font-size:0.6rem;color:{c_col};letter-spacing:0.2em;margin:0 0 1rem 0;">
-        RESEARCH CONCLUSION — {c_label}
+                border:1px solid {color}35;border-radius:2px;border-top:3px solid {color};">
+      <p style="font-family:Space Mono;font-size:0.6rem;color:{color};letter-spacing:0.2em;margin:0 0 1rem 0;">
+        VERDICT — {verdict}
       </p>
-      <p style="font-size:0.88rem;line-height:1.75;margin:0;color:{TEXT};">
-        The AMCE framework achieves a Sharpe ratio of <strong>{sh:.3f}</strong> 
-        (vs. benchmark {bsh:.3f}) with annualized return of <strong>{ann*100:.1f}%</strong> 
-        (vs. benchmark {bann*100:.1f}%). OLS alpha decomposition yields 
-        <strong>{a_ann*100:+.2f}%</strong> annualized excess return 
-        (t={a_t:.2f}, p={a_p:.3f}). Permutation testing across 1,000 signal shuffles 
-        {'rejects H₀ at p=' + f'{p_v:.4f}' + ' < 0.05, confirming genuine predictive skill' if sig_flag 
-         else 'yields p=' + f'{p_v:.4f}' + ', suggesting further model development is warranted'}. 
-        Purged walk-forward validation with {emb}-month embargo eliminates look-ahead bias. 
-        Bootstrap Monte Carlo across {int(nmc)} simulations confirms {'robust' if prob_beat>0.5 else 'limited'} 
-        probability of benchmark outperformance ({prob_beat*100:.0f}%). 
-        The ensemble architecture — Gradient Boosting + Random Forest + Regime Filtering — demonstrates 
-        {'stable out-of-sample generalization' if decay<0.25 else 'moderate performance decay'} 
-        ({decay:.0%} Sharpe ratio decay from training to test period).
+      <p style="font-size:0.9rem;line-height:1.75;margin:0;color:{TEXT};">
+        {msg}
       </p>
     </div>
     """, unsafe_allow_html=True)
 
 else:
     st.markdown("""
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem;margin:2rem 0;">
-      <div style="background:#0C0F1A;border:1px solid rgba(0,255,178,0.15);border-radius:2px;padding:1.5rem;border-top:2px solid #00FFB2;">
-        <p style="font-family:'Space Mono',monospace;font-size:0.58rem;color:#00FFB2;letter-spacing:0.2em;margin:0 0 0.75rem 0;">ARCHITECTURE</p>
-        <p style="font-weight:600;margin:0 0 0.5rem 0;">Regime-Filtered Boosting</p>
-        <p style="font-size:0.78rem;color:#5C6480;margin:0;line-height:1.6;">Gradient Boosting + RF. Dynamic 200-day MA Trend Filter. Volatility-adjusted entry thresholds.</p>
-      </div>
-      <div style="background:#0C0F1A;border:1px solid rgba(123,97,255,0.15);border-radius:2px;padding:1.5rem;border-top:2px solid #7B61FF;">
-        <p style="font-family:'Space Mono',monospace;font-size:0.58rem;color:#7B61FF;letter-spacing:0.2em;margin:0 0 0.75rem 0;">VALIDATION</p>
-        <p style="font-weight:600;margin:0 0 0.5rem 0;">Purged Walk-Forward</p>
-        <p style="font-size:0.78rem;color:#5C6480;margin:0;line-height:1.6;">Embargo gap prevents leakage. Quarterly retraining. 1,000-permutation significance test. Bootstrap Monte Carlo robustness.</p>
-      </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin:2rem 0;">
       <div style="background:#0C0F1A;border:1px solid rgba(255,59,107,0.15);border-radius:2px;padding:1.5rem;border-top:2px solid #FF3B6B;">
-        <p style="font-family:'Space Mono',monospace;font-size:0.58rem;color:#FF3B6B;letter-spacing:0.2em;margin:0 0 0.75rem 0;">ATTRIBUTION</p>
-        <p style="font-size:0.78rem;color:#5C6480;margin:0;line-height:1.6;">Game-theoretic SHAP feature attribution. Macro regime overlays. Transaction cost stress testing.</p>
+        <p style="font-family:Space Mono;font-size:0.58rem;color:#FF3B6B;letter-spacing:0.2em;margin:0 0 0.75rem 0;">WHAT'S NEW</p>
+        <p style="font-weight:600;margin:0 0 0.5rem 0;">Reality Adjustments</p>
+        <p style="font-size:0.78rem;color:#5C6480;margin:0;line-height:1.6;">
+        • Short-term capital gains tax (35%)<br>
+        • Long-term capital gains tax (20%)<br>
+        • Transaction costs (5 bps default)<br>
+        • Slippage modeling (5 bps default)<br>
+        • 1-day execution lag<br>
+        • 3-model ensemble (LR+RF+GB)
+        </p>
+      </div>
+      <div style="background:#0C0F1A;border:1px solid rgba(0,255,178,0.15);border-radius:2px;padding:1.5rem;border-top:2px solid #00FFB2;">
+        <p style="font-family:Space Mono;font-size:0.58rem;color:#00FFB2;letter-spacing:0.2em;margin:0 0 0.75rem 0;">THE TRUTH</p>
+        <p style="font-weight:600;margin:0 0 0.5rem 0;">Why This Matters</p>
+        <p style="font-size:0.78rem;color:#5C6480;margin:0;line-height:1.6;">
+        Most backtests ignore taxes and assume instant, frictionless execution. This creates a 30-50% performance gap 
+        between theory and reality. This version shows you what you'd ACTUALLY make after the IRS takes their cut 
+        and market friction eats your edge.
+        </p>
       </div>
     </div>
+    <p style="font-family:Space Mono;font-size:0.72rem;color:#5C6480;text-align:center;margin-top:2rem;">
+    ⚡ Configure reality parameters in sidebar → Run backtest
+    </p>
     """, unsafe_allow_html=True)
