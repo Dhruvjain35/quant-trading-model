@@ -20,7 +20,7 @@ class InstitutionalAMCE:
     def fetch_data(self):
         """Fetches base assets and generates a proxy for macro stress (VIX alternative)."""
         tickers = [self.risk_asset, self.safe_asset]
-        data = yf.download(tickers, start="2008-01-01", progress=False)['Adj Close']
+      data = yf.download(tickers, start="2008-01-01", progress=False)['Close']
         # Forward fill missing data, drop entirely empty rows
         self.raw_data = data.ffill().dropna()
 
