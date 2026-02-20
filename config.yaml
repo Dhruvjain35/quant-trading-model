@@ -1,1 +1,16 @@
+# Configuration for AMCE Platform
+data:
+  risk_asset: "SPY"
+  safe_asset: "TLT"
+  start_date: "2005-01-01"
 
+backtest:
+  transaction_cost_bps: 10
+  slippage_bps: 5
+  initial_capital: 10000000
+  walk_forward_train_days: 1260  # 5 years
+  walk_forward_step_days: 63     # Rebalance/Retrain quarterly
+
+model:
+  target_threshold: 0.0
+  voting_soft_threshold: 0.55    # Requires 55% confidence to take risk
