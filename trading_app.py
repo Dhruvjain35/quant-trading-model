@@ -111,7 +111,7 @@ def run_amce_pipeline(df, risk_asset, safe_asset, tc_bps):
     scaler = StandardScaler()
     
     train_window = 1000 # ~4 years initial training
-    step = 252 # Annual retraining
+    step = 252 # Annual retraining for speed
     
     for i in range(train_window, len(X), step):
         start_idx = max(0, i - train_window)
@@ -195,8 +195,8 @@ st.markdown("<div class='terminal-subtitle'>AMCE FRAMEWORK • PURGED WALK-FORWA
 st.markdown("""
 <div style='background-color: #0d1117; border-left: 4px solid #4facfe; padding: 15px; margin-bottom: 30px; border-radius: 4px;'>
     <div style='color: #4facfe; font-size: 0.75rem; font-weight: bold; margin-bottom: 5px;'>RESEARCH HYPOTHESIS</div>
-    <div style='font-size: 0.85rem; color: #c9d1d9; margin-bottom: 3px;'><b>H₀ (Null):</b> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.</div>
-    <div style='font-size: 0.85rem; color: #c9d1d9;'><b>H₁ (Alternative):</b> Integrating momentum dynamics and yield curve signals with purged walk-forward validation generates positive crisis alpha and statistically significant risk-adjusted outperformance.</div>
+    <div style='font-size: 0.85rem; color: #c9d1d9; margin-bottom: 3px;'><b>H0 (Null):</b> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.</div>
+    <div style='font-size: 0.85rem; color: #c9d1d9;'><b>H1 (Alternative):</b> Integrating momentum dynamics and yield curve signals with purged walk-forward validation generates positive crisis alpha and statistically significant risk-adjusted outperformance.</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -212,10 +212,10 @@ if execute:
         
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         
-        c1.markdown(f"""<div class='metric-container'><div class='metric-label'>SHARPE RATIO</div><div class='metric-value'>{metrics['Sharpe']:.3f}</div><div class='metric-sub'>↑ Bench: {metrics['Bench_Sharpe']:.3f}</div></div>""", unsafe_allow_html=True)
-        c2.markdown(f"""<div class='metric-container border-purple'><div class='metric-label'>SORTINO RATIO</div><div class='metric-value'>{metrics['Sortino']:.3f}</div><div class='metric-sub'>↑ Downside-adj.</div></div>""", unsafe_allow_html=True)
-        c3.markdown(f"""<div class='metric-container'><div class='metric-label'>TOTAL RETURN</div><div class='metric-value'>{metrics['Total_Ret']*100:.0f}%</div><div class='metric-sub'>↑ Bench: {metrics['Bench_Tot_Ret']*100:.0f}%</div></div>""", unsafe_allow_html=True)
-        c4.markdown(f"""<div class='metric-container border-purple'><div class='metric-label'>ANN. RETURN</div><div class='metric-value'>{metrics['Ann_Ret']*100:.1f}%</div><div class='metric-sub'>↑ Bench: {metrics['Bench_Ann_Ret']*100:.1f}%</div></div>""", unsafe_allow_html=True)
+        c1.markdown(f"""<div class='metric-container'><div class='metric-label'>SHARPE RATIO</div><div class='metric-value'>{metrics['Sharpe']:.3f}</div><div class='metric-sub'>Bench: {metrics['Bench_Sharpe']:.3f}</div></div>""", unsafe_allow_html=True)
+        c2.markdown(f"""<div class='metric-container border-purple'><div class='metric-label'>SORTINO RATIO</div><div class='metric-value'>{metrics['Sortino']:.3f}</div><div class='metric-sub'>Downside-adj.</div></div>""", unsafe_allow_html=True)
+        c3.markdown(f"""<div class='metric-container'><div class='metric-label'>TOTAL RETURN</div><div class='metric-value'>{metrics['Total_Ret']*100:.0f}%</div><div class='metric-sub'>Bench: {metrics['Bench_Tot_Ret']*100:.0f}%</div></div>""", unsafe_allow_html=True)
+        c4.markdown(f"""<div class='metric-container border-purple'><div class='metric-label'>ANN. RETURN</div><div class='metric-value'>{metrics['Ann_Ret']*100:.1f}%</div><div class='metric-sub'>Bench: {metrics['Bench_Ann_Ret']*100:.1f}%</div></div>""", unsafe_allow_html=True)
         c5.markdown(f"""<div class='metric-container border-green'><div class='metric-label'>MAX DRAWDOWN</div><div class='metric-value'>{metrics['Max_DD']*100:.1f}%</div><div class='metric-sub'>Calmar: {abs(metrics['Ann_Ret']/metrics['Max_DD']):.2f}</div></div>""", unsafe_allow_html=True)
         c6.markdown(f"""<div class='metric-container'><div class='metric-label'>CVAR (95%)</div><div class='metric-value'>{metrics['CVaR']*100:.2f}%</div><div class='metric-sub'>Monthly Tail Risk</div></div>""", unsafe_allow_html=True)
 
@@ -232,9 +232,6 @@ if execute:
         
         # Drawdown profile
         fig.add_trace(go.Scatter(x=bt.index, y=bt['Strat_DD'], name='Strategy DD', fill='tozeroy', line=dict(color='#ff3366', width=1)), row=2, col=1)
-        
-        # Regime highlighting (Green background where model says Risk-On)
-        risk_on_periods = bt[bt['Target_Weight'] == 1].index
         
         fig.update_layout(
             template='plotly_dark',
