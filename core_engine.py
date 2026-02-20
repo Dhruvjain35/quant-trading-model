@@ -120,12 +120,12 @@ class InstitutionalAMCE:
         
         return self.results
 
-def simulate_portfolio(self, tc_bps=5, slip_bps=2, tax_rate=0.0):
-        """Simulates capital allocation with real-world frictions (Fees, Slippage, Taxes)."""
-        df = self.raw_data.loc[self.results.index].copy()
-        df['Risk_Ret'] = df[self.risk_asset].pct_change()
-        df['Safe_Ret'] = df[self.safe_asset].pct_change()
-        df['Prob'] = self.results['Risk_On_Prob']
+        def simulate_portfolio(self, tc_bps=5, slip_bps=2, tax_rate=0.0):
+                """Simulates capital allocation with real-world frictions (Fees, Slippage, Taxes)."""
+                df = self.raw_data.loc[self.results.index].copy()
+                df['Risk_Ret'] = df[self.risk_asset].pct_change()
+                df['Safe_Ret'] = df[self.safe_asset].pct_change()
+                df['Prob'] = self.results['Risk_On_Prob']
         
         # CONTINUOUS POSITION SIZING
         def size_position(prob):
