@@ -71,9 +71,34 @@ st.markdown("""
 
 @st.cache_data(show_spinner=False)
 def fetch_market_data(risk_asset, safe_asset):
-    # Fetching 15 years of data to ensure statistical significance
-    data = yf.download([risk_asset, safe_asset], start="2008-01-01", progress=False)['Adj Close']
+    # Fetching 15 years of data
+    data = yf.download([risk_asset, safe_asset], start="2008-01-01", progress=False)
+    
+    # Bulletproof column extraction for yfinance's shifting API
+    if isinstance(data.columns, pd.MultiIndex):
+        if 'Adj Close' in data.columns.levels[0]:
+            data = data['Adj Close']
+        elif 'Close' in data.columns.levels[0]:
+            data = data['Close']
+        else:
+            st.error("Critical Data Error: yfinance did not return pricing data.")
+            st.stop()
+    else:
+        if 'Adj Close' in data.columns:
+            data = data['Adj Close']
+        elif 'Close' in data.columns:
+            data = data['Close']
+        else:
+            st.error("Critical Data Error: yfinance did not return pricing data.")
+            st.stop()
+            
     data = data.dropna()
+    
+    # Failsafe for bad user inputs (e.g., typing "QQQ " instead of "QQQ")
+    if data.empty or risk_asset not in data.columns or safe_asset not in data.columns:
+        st.error(f"Data Fetch Failed. Ensure '{risk_asset}' and '{safe_asset}' are valid Yahoo Finance tickers.")
+        st.stop()
+        
     return data
 
 @st.cache_data(show_spinner=False)
