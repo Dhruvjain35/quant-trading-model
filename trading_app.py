@@ -329,8 +329,9 @@ def engineer_features(prices, returns, risky_ticker, vix=None):
     # Clean
     df = df.dropna()
     
-    # Target: FORWARD-SHIFTED (prevents leakage)
-    target = (returns[risky_ticker].shift(-1) > 0).astype(int)
+    
+   # Target: Predict if price in 20 days will be higher than today
+    target = (prices[risky_ticker].shift(-20) > prices[risky_ticker]).astype(int)
     
     # Align indices
     common_idx = df.index.intersection(target.index)
@@ -389,12 +390,19 @@ def run_ensemble_backtest(X, y, vix_threshold=25, min_hold_days=30):
         current_dd = X_test['dist_from_high'].values[0]
         in_crisis = (current_vix > vix_threshold) or (current_dd < -0.10)
         
+        # Crisis detection
+        current_vix = X_test['vix'].values[0]
+        current_dd = X_test['dist_from_high'].values[0]
+        in_crisis = (current_vix > vix_threshold) or (current_dd < -0.10)
+        
         if not in_crisis:
-            signal = 0
+            signal = 1  # DEFAULT TO LONG IN CALM BULL MARKETS
         else:
-            # Train all models
+            # IN CRISIS: Let the ML decide to stay long, go to cash, or short
             X_train_scaled = scaler.fit_transform(X_train)
             X_test_scaled = scaler.transform(X_test)
+            
+            # ... (keep the rest of the prediction logic exactly the same) ...
             
             # Get predictions
             predictions = []
