@@ -36,8 +36,10 @@ step_size = st.sidebar.slider("Step Size (Days)", 21, 252, 63, step=21)
 st.sidebar.markdown("### 🎲 MONTE CARLO")
 mc_sims = st.sidebar.slider("Bootstrap Paths", 100, 1000, 500, step=100)
 
-st.sidebar.markdown("### 📉 FRICTIONS")
+st.sidebar.markdown("### 📉 REAL WORLD FRICTIONS")
 tc_bps = st.sidebar.slider("Transaction Cost (bps)", 0, 20, 5)
+slip_bps = st.sidebar.slider("Market Slippage (bps)", 0, 20, 2)
+tax_rate = st.sidebar.slider("Short-Term Tax Rate (%)", 0.0, 50.0, 0.0, step=5.0) / 100.0
 
 execute = st.sidebar.button("COMPILE MASTER TERMINAL", use_container_width=True)
 
@@ -62,10 +64,11 @@ if execute:
         engine.fetch_data()
         engine.engineer_features()
         engine.purged_walk_forward_backtest(train_window=train_window, step_size=step_size)
-        bt = engine.simulate_portfolio(tc_bps=tc_bps)
+        
+        # --- NEW REPLACEMENT LINE ---
+        bt = engine.simulate_portfolio(tc_bps=tc_bps, slip_bps=slip_bps, tax_rate=tax_rate)
         
         strat_cagr, strat_vol, strat_sharpe, strat_mdd, strat_cum, strat_dd = calc_stats(bt['Net_Ret'])
-        bench_cagr, bench_vol, bench_sharpe, bench_mdd, bench_cum, bench_dd = calc_stats(bt['Bench_Ret'])
         
         # 2. EXECUTIVE METRICS
         c1, c2, c3, c4, c5, c6 = st.columns(6)
