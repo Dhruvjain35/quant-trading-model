@@ -250,39 +250,34 @@ code {
 # ============================================================
 @st.cache_data(show_spinner=False)
 def load_data(risky_ticker, safe_ticker, start_date="2000-01-01"):
-    """Load and prepare market data"""
+    """Load and prepare market data robustly handling modern yfinance MultiIndex"""
     try:
-        # Download data
-        r_data = yf.download(risky_ticker, start=start_date, progress=False, auto_adjust=True)
-        s_data = yf.download(safe_ticker, start=start_date, progress=False, auto_adjust=True)
+        # Download all tickers at once to enforce a consistent MultiIndex structure
+        tickers = f"{risky_ticker} {safe_ticker} ^VIX"
+        raw_data = yf.download(tickers, start=start_date, progress=False)
         
-        # Handle column structure
-        def extract_close(df):
-            if isinstance(df.columns, pd.MultiIndex):
-                return df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-            return df['Close'] if 'Close' in df.columns else df.iloc[:, 0]
+        # Modern yfinance returns MultiIndex: Level 0 is 'Close', 'High', etc. Level 1 is Ticker.
+        if isinstance(raw_data.columns, pd.MultiIndex):
+            closes = raw_data['Close']
+        else:
+            closes = raw_data # Fallback 
+            
+        # Clean and align the core asset prices
+        prices = closes[[risky_ticker, safe_ticker]].dropna()
         
-        r_prices = extract_close(r_data)
-        s_prices = extract_close(s_data)
-        
-        # Combine and align
-        prices = pd.concat([r_prices, s_prices], axis=1).dropna()
-        prices.columns = [risky_ticker, safe_ticker]
-        
-        # Returns
+        # Calculate returns
         returns = prices.pct_change().dropna()
         
-        # VIX
-        try:
-            vix_data = yf.download("^VIX", start=start_date, progress=False, auto_adjust=True)
-            vix = extract_close(vix_data).reindex(prices.index, method='ffill')
-        except:
+        # Extract VIX and forward-fill to match trading days
+        if '^VIX' in closes.columns:
+            vix = closes['^VIX'].reindex(prices.index, method='ffill')
+        else:
             vix = None
-        
+            
         return prices, returns, vix
     
     except Exception as e:
-        st.error(f"Data loading error: {e}")
+        st.error(f"Data pipeline critical failure: {e}")
         return None, None, None
 
 # ============================================================
