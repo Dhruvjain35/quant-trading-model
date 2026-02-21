@@ -44,7 +44,6 @@ h2 {color: #8B95A8; font-size: 0.8rem; letter-spacing: 0.15em; border-bottom: 1p
 # ==========================================
 # 1. DATA ACQUISITION & FEATURE ENGINEERING
 # ==========================================
-@st.cache_data(show_spinner=False)
 def get_market_data(risk_asset, safe_asset):
     tickers = [risk_asset, safe_asset, '^VIX', '^TNX'] # TNX = 10Y Yield
     df = yf.download(tickers, start="2006-01-01", end="2026-01-01", progress=False)['Close']
@@ -56,7 +55,6 @@ def get_market_data(risk_asset, safe_asset):
     df = df.rename(columns={risk_asset: 'Risk', safe_asset: 'Safe', '^VIX': 'VIX', '^TNX': 'Yield'})
     return df
 
-@st.cache_data(show_spinner=False)
 def engineer_features(df):
     data = df.copy()
     
@@ -89,7 +87,6 @@ def engineer_features(df):
 # ==========================================
 # 2. ML ENSEMBLE & PURGED VALIDATION
 # ==========================================
-@st.cache_resource(show_spinner=False)
 def train_ensemble_model(data, features, embargo_months):
     # Walk-forward split: 70% Train, Embargo Gap, 30% Test
     split_idx = int(len(data) * 0.70)
