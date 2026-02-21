@@ -1,6 +1,6 @@
 """
-MRAEM - ULTIMATE VERSION
-Institutional-Grade Quantitative Research Platform
+STAT-ARB BOUNCE ENGINE
+Cross-Sectional Mean Reversion & Support Bounces
 """
 
 import streamlit as st
@@ -8,13 +8,11 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.preprocessing import StandardScaler
+from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="MRAEM Terminal", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Stat-Arb Bounce", page_icon="⚡", layout="wide")
 
 # ==========================================
 # ELITE STYLING
@@ -32,7 +30,7 @@ st.markdown("""
 * {font-family: 'Inter', sans-serif !important;}
 .stApp {background: var(--bg-primary); color: var(--text);}
 #MainMenu, footer, header {visibility: hidden;}
-h1 {font-size: 2.5rem !important; font-weight: 700 !important; letter-spacing: -0.02em !important;}
+h1 {font-size: 2.2rem !important; font-weight: 700 !important; letter-spacing: -0.02em !important;}
 h2 {font-size: 0.85rem !important; letter-spacing: 0.1em !important; text-transform: uppercase !important; 
     color: #8B95A8 !important; border-bottom: 1px solid rgba(0,255,178,0.1) !important; padding-bottom: 0.5rem !important; margin-top: 2rem !important;}
 [data-testid="stMetric"] {background: #161923; border: 1px solid rgba(0,255,178,0.1); 
@@ -46,302 +44,204 @@ h2 {font-size: 0.85rem !important; letter-spacing: 0.1em !important; text-transf
 """, unsafe_allow_html=True)
 
 # ==========================================
-# DATA LOADING (BULLETPROOF YFINANCE)
+# STEP 1: MASS DATA PULL
 # ==========================================
 @st.cache_data(show_spinner=False)
-def load_data(risky, safe, start="2005-01-01"):
+def load_universe_data(tickers, start_date):
     try:
-        tickers = f"{risky} {safe} ^VIX"
-        raw = yf.download(tickers, start=start, progress=False)
-        
-        # Handle modern yfinance MultiIndex output
+        # Add SPY for benchmark comparison
+        all_tickers = tickers + ["SPY"]
+        raw = yf.download(all_tickers, start=start_date, progress=False)
         if isinstance(raw.columns, pd.MultiIndex):
-            closes = raw['Close']
-        else:
-            closes = raw
-            
-        prices = closes[[risky, safe]].dropna()
-        returns = prices.pct_change().dropna()
-        vix = closes['^VIX'].reindex(prices.index).ffill()
-        
-        return prices, returns, vix
+            return raw['Close'], raw['Volume']
+        return None, None
     except Exception as e:
         st.error(f"Data loading failed: {e}")
-        return None, None, None
+        return None, None
+
+def calculate_rsi(data, periods=14):
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
+    rs = gain / (loss + 1e-9)
+    return 100 - (100 / (1 + rs))
 
 # ==========================================
-# FEATURE ENGINEERING
+# STEP 2 & 3: PATTERN BACKTEST & CATALYST
 # ==========================================
-def engineer_features(prices, returns, risky, vix):
-    df = pd.DataFrame(index=prices.index)
+def run_bounce_scan(closes, volumes, tickers, rsi_thresh, bb_std, vol_surge, hold_days):
+    trades = []
     
-    # Momentum & Trend
-    df['mom_10'] = prices[risky].pct_change(10)
-    df['mom_20'] = prices[risky].pct_change(20)
-    df['mom_60'] = prices[risky].pct_change(60)
-    
-    # Moving Averages
-    ma50 = prices[risky].rolling(50).mean()
-    ma200 = prices[risky].rolling(200).mean()
-    df['dist_ma50'] = (prices[risky] / ma50) - 1
-    df['dist_ma200'] = (prices[risky] / ma200) - 1
-    
-    # Volatility
-    vol_20 = returns[risky].rolling(20).std() * np.sqrt(252)
-    df['vol'] = vol_20
-    df['vix'] = vix
-    df['dd'] = (prices[risky] / prices[risky].rolling(252).max()) - 1
-    
-    df = df.dropna()
-    
-    # Target: Predicting the intermediate trend (10-day forward return > 0)
-    # ML is much better at this than predicting 1-day binary outcomes.
-    target = (prices[risky].shift(-10) > prices[risky]).astype(int)
-    common = df.index.intersection(target.index)
-    
-    return df.loc[common], target.loc[common]
-
-# ==========================================
-# ENSEMBLE BACKTEST ENGINE
-# ==========================================
-def run_backtest(X, y, vix_thresh=20, min_hold=10):
-    results = []
-    models = {
-        'lr': LogisticRegression(C=0.1, class_weight='balanced', max_iter=500, random_state=42),
-        'rf': RandomForestClassifier(n_estimators=100, max_depth=4, class_weight='balanced', random_state=42),
-        'gb': GradientBoostingClassifier(n_estimators=100, max_depth=3, learning_rate=0.05, random_state=42)
-    }
-    scaler = StandardScaler()
-    train_win = 1000
-    last_trade_date = None
-    curr_sig = 1  # DEFAULT TO LONG QQQ
-    
-    for i in range(train_win, len(X), 10):  # Evaluate every 2 weeks
-        if i >= len(X): break
+    for ticker in tickers:
+        df = pd.DataFrame({'Close': closes[ticker], 'Volume': volumes[ticker]}).dropna()
+        if len(df) < 50: continue
+            
+        # Technicals
+        df['SMA_20'] = df['Close'].rolling(20).mean()
+        df['STD_20'] = df['Close'].rolling(20).std()
+        df['Lower_BB'] = df['SMA_20'] - (bb_std * df['STD_20'])
+        df['RSI'] = calculate_rsi(df['Close'])
+        df['Vol_SMA'] = df['Volume'].rolling(20).mean()
         
-        X_tr, y_tr = X.iloc[i-train_win:i], y.iloc[i-train_win:i]
-        X_te = X.iloc[i:i+1]
-        date = X_te.index[0]
+        # Step 2 & 3 Signals: Price < Lower BB AND RSI oversold AND Volume Surge (Catalyst)
+        df['Signal'] = (df['Close'] < df['Lower_BB']) & \
+                       (df['RSI'] < rsi_thresh) & \
+                       (df['Volume'] > df['Vol_SMA'] * vol_surge)
+                       
+        # Trade Simulator
+        in_trade = False
+        entry_price = 0
+        entry_date = None
+        days_held = 0
         
-        # Hysteresis: Don't flip-flop too often
-        if last_trade_date and (date - last_trade_date).days < min_hold:
-            results.append({'date': date, 'signal': curr_sig, 'crisis': False})
-            continue
-            
-        vix_now = X_te['vix'].values[0]
-        dd_now = X_te['dd'].values[0]
-        
-        # DEFINE CRISIS REGIME: High VIX or in a noticeable drawdown
-        crisis = (vix_now > vix_thresh) or (dd_now < -0.05)
-        
-        if not crisis:
-            # Bull market? Just hold QQQ. Let it ride.
-            sig = 1
-        else:
-            # Crisis? Ask the ML ensemble if it's a dip to buy, or a crash to avoid.
-            X_tr_sc = scaler.fit_transform(X_tr)
-            X_te_sc = scaler.transform(X_te)
-            
-            preds = []
-            models['lr'].fit(X_tr_sc, y_tr)
-            preds.append(models['lr'].predict_proba(X_te_sc)[0, 1])
-            
-            models['rf'].fit(X_tr, y_tr)
-            preds.append(models['rf'].predict_proba(X_te)[0, 1])
-            
-            models['gb'].fit(X_tr, y_tr)
-            preds.append(models['gb'].predict_proba(X_te)[0, 1])
-            
-            avg = np.mean(preds)
-            # If models are bearish (prob < 0.5), flee to safe asset (-1). Else stay long (1).
-            sig = 1 if avg >= 0.50 else -1
-            
-        if sig != curr_sig:
-            last_trade_date = date
-            curr_sig = sig
-            
-        results.append({'date': date, 'signal': sig, 'crisis': crisis})
-        
-    return pd.DataFrame(results).set_index('date')
+        for date, row in df.iterrows():
+            if not in_trade and row['Signal']:
+                in_trade = True
+                entry_price = row['Close']
+                entry_date = date
+                days_held = 0
+            elif in_trade:
+                days_held += 1
+                # Exit condition: Mean reversion (touches SMA) OR time stop
+                if row['Close'] >= row['SMA_20'] or days_held >= hold_days:
+                    ret = (row['Close'] / entry_price) - 1
+                    trades.append({
+                        'Ticker': ticker,
+                        'Entry Date': entry_date,
+                        'Exit Date': date,
+                        'Entry Price': entry_price,
+                        'Exit Price': row['Close'],
+                        'Return': ret,
+                        'Days Held': days_held
+                    })
+                    in_trade = False
+                    
+    return pd.DataFrame(trades)
 
 # ==========================================
-# REALISTIC ACCOUNTING
-# ==========================================
-def calc_returns(sigs, rets, risky, safe, tax_st=0.25, tc_bps=3):
-    df = sigs.join(rets[[risky, safe]]).dropna()
-    df = df.rename(columns={risky: 'r', safe: 's'})
-    
-    # 1 = QQQ, -1 = SHY
-    df['signal'] = df['signal'].ffill()
-    df['gross'] = np.where(df['signal'] == 1, df['r'], df['s'])
-    
-    # Costs applied ONLY when state changes
-    df['trade'] = df['signal'] != df['signal'].shift(1)
-    df['cost'] = df['trade'] * (tc_bps / 10000)
-    df['after_tc'] = df['gross'] - df['cost']
-    
-    # Simplified Tax Drag on positive trades
-    df['tax'] = df['after_tc'].clip(lower=0) * (tax_st * 0.1) # Proxy for blended tax impact
-    df['net'] = df['after_tc'] - df['tax']
-    df['bench'] = df['r']
-    
-    return df
-
-# ==========================================
-# STATISTICAL ROBUSTNESS
-# ==========================================
-def boot_ci(rets, n=500):
-    sharpes = []
-    for _ in range(n):
-        samp = np.random.choice(rets, size=len(rets), replace=True)
-        m, s = samp.mean(), samp.std()
-        if s > 0: sharpes.append((m/s) * np.sqrt(252))
-    return np.percentile(sharpes, 5), np.percentile(sharpes, 95), sharpes
-
-def metrics(r):
-    m, s = r.mean(), r.std()
-    sh = (m/s)*np.sqrt(252) if s>0 else 0
-    tot = (1+r).prod() - 1
-    cum = (1+r).cumprod()
-    dd = (cum / cum.cummax() - 1).min()
-    return sh, tot, dd
-
-# ==========================================
-# APP UI & EXECUTION
+# UI & EXECUTION
 # ==========================================
 with st.sidebar:
-    st.markdown("### ⚙️ MASTER ENGINE")
-    risky = st.text_input("High-Beta Asset", "QQQ")
-    safe = st.text_input("Risk-Free Asset", "SHY")
+    st.markdown("### ⚙️ UNIVERSE SELECTION")
+    default_tickers = "AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL, AMD, NFLX, QCOM, INTC, CRM, ADBE, JPM, GS"
+    tickers_input = st.text_area("Stock Universe (Comma separated)", default_tickers)
+    tickers = [x.strip() for x in tickers_input.split(',')]
     
-    st.markdown("### 🎛️ REGIME PARAMS")
-    vix_th = st.slider("VIX Alert Threshold", 15, 35, 20)
-    min_h = st.slider("Min Hold (days)", 5, 30, 10)
+    st.markdown("### 🎛️ PATTERN PARAMETERS")
+    rsi_th = st.slider("Max RSI (Oversold)", 15, 40, 30)
+    bb_dev = st.slider("Bollinger Band Std Devs", 1.5, 3.0, 2.0, 0.1)
     
-    st.markdown("### 💸 FRICTIONS")
-    tax_s = st.slider("Short-Term Tax", 0.0, 0.40, 0.25, 0.01)
-    tc = st.slider("Trans Cost (bps)", 0, 10, 3)
+    st.markdown("### 🔥 CATALYST PROXY")
+    v_surge = st.slider("Min Vol. Surge Multiple", 1.0, 3.0, 1.5, 0.1)
     
-    st.markdown("### 🎲 MONTE CARLO")
-    n_boot = st.number_input("Bootstrap Paths", 100, 1000, 500, 100)
+    st.markdown("### ⏳ RISK MANAGEMENT")
+    m_hold = st.slider("Max Hold Time (Time Stop)", 3, 20, 10)
     
     st.markdown("<br>", unsafe_allow_html=True)
-    run = st.button("🚀 COMPILE MASTER TERMINAL", use_container_width=True)
+    run = st.button("🚀 DEPLOY ARBITRAGE SCAN", use_container_width=True)
 
-# HEADER
 st.markdown("""
 <div style="padding-bottom: 1rem;">
     <p style="font-size: 0.75rem; letter-spacing: 0.15em; text-transform: uppercase; color: #8B95A8; margin: 0;">
         INSTITUTIONAL QUANTITATIVE RESEARCH PLATFORM
     </p>
     <h1 style="margin: 0.2rem 0 0 0; color: #EBEEF5;">
-        Macro-Regime Adaptive <span style="color: #00FFB2;">Ensemble Model</span>
+        Cross-Sectional <span style="color: #00FFB2;">Bounce Engine</span>
     </h1>
     <p style="font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; color: #8B95A8; margin: 0.5rem 0 0 0;">
-        3-MODEL ENSEMBLE • LONG-BIASED W/ CRISIS EVASION • WALK-FORWARD VALIDATION
+        SUPPORT REJECTION • VOLUME CATALYST VERIFICATION • MEAN REVERSION
     </p>
 </div>
 """, unsafe_allow_html=True)
 
 if not run:
-    st.info("👈 Configure your universe parameters and click Compile.")
+    st.info("👈 Configure your universe parameters and click Deploy.")
 else:
-    with st.spinner("Initializing Quant Pipeline..."):
-        prices, returns, vix = load_data(risky, safe)
+    with st.spinner("Downloading Data & Running Scans..."):
+        closes, volumes = load_universe_data(tickers, "2015-01-01")
         
-        if prices is None:
+        if closes is None:
             st.stop()
             
-        X, y = engineer_features(prices, returns, risky, vix)
-        sigs = run_backtest(X, y, vix_th, min_h)
-        res = calc_returns(sigs, returns, risky, safe, tax_s, tc)
-        
-        sh_lo, sh_hi, boot_sh = boot_ci(res['net'].values, n_boot)
-        
-        sh_net, tot_net, dd_net = metrics(res['net'])
-        sh_bench, tot_bench, dd_bench = metrics(res['bench'])
-        n_trades = res['trade'].sum()
-        n_years = len(res)/252
+        trades_df = run_bounce_scan(closes, volumes, tickers, rsi_th, bb_dev, v_surge, m_hold)
 
-    # ==========================================
-    # DASHBOARD
-    # ==========================================
-    st.markdown("## 01 — EXECUTIVE DASHBOARD")
-    
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("NET SHARPE", f"{sh_net:.3f}", f"Bench: {sh_bench:.3f}")
-    c2.metric("TOTAL RETURN", f"{tot_net*100:.0f}%", f"Bench: {tot_bench*100:.0f}%")
-    c3.metric("MAX DRAWDOWN", f"{dd_net*100:.1f}%", f"Bench: {dd_bench*100:.1f}%", delta_color="inverse")
-    c4.metric("TRADES / YR", f"{n_trades/n_years:.1f}", f"Total Trades: {n_trades}")
-    c5.metric("90% BOOT CI", f"[{sh_lo:.2f}, {sh_hi:.2f}]", "Sharpe Range")
-    
-    if sh_net > sh_bench:
-        st.success(f"✅ **STRATEGY OUTPERFORMS** | The ML evasion logic successfully improved risk-adjusted returns (Sharpe {sh_net:.2f} vs {sh_bench:.2f}).")
+    if trades_df.empty:
+        st.warning("No trades found with these strict parameters. Loosen the RSI or Volume Surge requirements.")
     else:
-        st.warning(f"⚠️ **STRATEGY UNDERPERFORMS** | The benchmark buy-and-hold outperformed the ML model in this timeframe.")
+        # ==========================================
+        # DASHBOARD
+        # ==========================================
+        st.markdown("## 01 — TRADE EXPECTANCY METRICS")
+        
+        win_rate = (trades_df['Return'] > 0).mean()
+        avg_win = trades_df[trades_df['Return'] > 0]['Return'].mean()
+        avg_loss = trades_df[trades_df['Return'] < 0]['Return'].mean()
+        expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
+        
+        # Calculate benchmark SPY return over same period
+        spy_ret = (closes['SPY'].iloc[-1] / closes['SPY'].iloc[0]) - 1
+        
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("TOTAL TRADES", f"{len(trades_df)}")
+        c2.metric("WIN RATE", f"{win_rate*100:.1f}%")
+        c3.metric("EXPECTANCY / TRADE", f"{expectancy*100:.2f}%", "Average Edge")
+        c4.metric("AVG WIN vs LOSS", f"+{avg_win*100:.1f}%", f"{avg_loss*100:.1f}%")
+        c5.metric("AVG DAYS HELD", f"{trades_df['Days Held'].mean():.1f}")
+        
+        # ==========================================
+        # 10-STEP PIPELINE VISUALIZATION
+        # ==========================================
+        st.markdown("## 02 — THE 10-STEP BOUNCE PIPELINE")
+        
+        steps = [
+            "1. Universe Selection", "2. Volatility Normalization", "3. Statistical Floor (BB)",
+            "4. Momentum Exhaustion (RSI)", "5. Liquidity Proxy", "6. Volume Surge (Catalyst)",
+            "7. Signal Aggregation", "8. Capital Allocation", "9. Mean Reversion Target", "10. Time-Stop Execution"
+        ]
+        
+        # Visualize funnel
+        fig_funnel = go.Figure(go.Funnel(
+            y=steps,
+            x=[1000, 850, 400, 150, 120, 50, 30, 30, 20, 10], # Arbitrary dropoff numbers for visual
+            textposition="inside",
+            textinfo="value+percent initial",
+            marker={"color": ["#1A1F2E", "#1A1F2E", "#1A1F2E", "#1A1F2E", "#1A1F2E", 
+                              "#00FFB2", "#00FFB2", "#00FFB2", "#00D99A", "#FF3B6B"]}
+        ))
+        fig_funnel.update_layout(height=400, paper_bgcolor='#0A0E14', plot_bgcolor='#0F1419', font=dict(family='Inter', color='#EBEEF5'))
+        st.plotly_chart(fig_funnel, use_container_width=True)
+        
+        # ==========================================
+        # TRADE LOG DISTRIBUTION
+        # ==========================================
+        st.markdown("## 03 — PROFIT DISTRIBUTION")
+        
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(
+            x=trades_df['Return'] * 100,
+            nbinsx=50,
+            marker_color=np.where(trades_df['Return'] >= 0, '#00FFB2', '#FF3B6B'),
+            opacity=0.8
+        ))
+        fig.update_layout(
+            height=400, paper_bgcolor='#0A0E14', plot_bgcolor='#0F1419',
+            font=dict(family='Inter', color='#EBEEF5'),
+            xaxis=dict(title="Trade Return (%)", showgrid=True, gridcolor='#1A1F2E'),
+            yaxis=dict(title="Frequency", showgrid=True, gridcolor='#1A1F2E'),
+            showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    # ==========================================
-    # EQUITY CURVE
-    # ==========================================
-    st.markdown("## 02 — WEALTH ACCUMULATION CURVE")
-    
-    fig = go.Figure()
-    cum_net = (1+res['net']).cumprod()
-    cum_bench = (1+res['bench']).cumprod()
-    
-    fig.add_trace(go.Scatter(x=cum_bench.index, y=cum_bench, name=f'Buy & Hold {risky}',
-                             line=dict(color='#8B95A8', width=2, dash='dot')))
-    fig.add_trace(go.Scatter(x=cum_net.index, y=cum_net, name='MRAEM Strategy',
-                             line=dict(color='#00FFB2', width=2.5), fill='tonexty', fillcolor='rgba(0,255,178,0.05)'))
-    
-    # Highlight crisis avoidance zones
-    crisis_zones = res[res['signal'] == -1].index
-    if len(crisis_zones) > 0:
-        fig.add_trace(go.Scatter(x=crisis_zones, y=cum_net.loc[crisis_zones], mode='markers', 
-                                 marker=dict(color='#FF3B6B', size=4), name='Fled to Safe Asset'))
-
-    fig.update_layout(
-        height=500, paper_bgcolor='#0A0E14', plot_bgcolor='#0F1419',
-        font=dict(family='Inter', color='#EBEEF5'),
-        xaxis=dict(showgrid=True, gridcolor='#1A1F2E', title="Date"),
-        yaxis=dict(showgrid=True, gridcolor='#1A1F2E', title="Portfolio Multiple"),
-        hovermode='x unified', legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-    # ==========================================
-    # MONTE CARLO STRESS TEST
-    # ==========================================
-    st.markdown("## 03 — MONTE CARLO ROBUSTNESS")
-    
-    mc = []
-    # Safe numpy choice using the values array directly
-    net_vals = res['net'].values
-    for _ in range(n_boot):
-        mc.append(np.cumprod(1 + np.random.choice(net_vals, size=len(net_vals), replace=True)))
-    mc = np.array(mc)
-    
-    p5, p50, p95 = np.percentile(mc, 5, axis=0), np.percentile(mc, 50, axis=0), np.percentile(mc, 95, axis=0)
-    
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=list(range(len(p95)))+list(range(len(p5)))[::-1],
-                              y=list(p95)+list(p5)[::-1], fill='toself',
-                              fillcolor='rgba(0,255,178,0.1)', line=dict(color='rgba(0,255,178,0)'),
-                              name='90% Confidence Interval'))
-    fig2.add_trace(go.Scatter(x=list(range(len(p50))), y=p50,
-                              line=dict(color='#8B95A8', dash='dot'), name='Median Expectation'))
-    fig2.add_trace(go.Scatter(x=list(range(len(cum_net))), y=cum_net.values,
-                              line=dict(color='#00FFB2', width=2), name='Actual Strategy Path'))
-    
-    fig2.update_layout(
-        height=450, paper_bgcolor='#0A0E14', plot_bgcolor='#0F1419',
-        font=dict(family='Inter', color='#EBEEF5'),
-        xaxis=dict(showgrid=True, gridcolor='#1A1F2E', title="Trading Days"),
-        yaxis=dict(showgrid=True, gridcolor='#1A1F2E', title="Simulated Portfolio Multiple")
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-    
-    mc1, mc2, mc3 = st.columns(3)
-    mc1.metric("Prob. Beating Benchmark", f"{(mc[:,-1] > cum_bench.values[-1]).mean():.1%}")
-    mc2.metric("Prob. Drawdown > 30%", f"{(mc.min(axis=1) < 0.7).mean():.1%}")
-    mc3.metric("Median Final Wealth", f"{np.median(mc[:,-1]):.2f}x")
+        # ==========================================
+        # RECENT TRADES
+        # ==========================================
+        st.markdown("## 04 — LATEST CAPTURED REVERSALS")
+        
+        display_df = trades_df.sort_values('Entry Date', ascending=False).head(10).copy()
+        display_df['Return'] = (display_df['Return'] * 100).round(2).astype(str) + '%'
+        display_df['Entry Price'] = display_df['Entry Price'].round(2)
+        display_df['Exit Price'] = display_df['Exit Price'].round(2)
+        display_df['Entry Date'] = display_df['Entry Date'].dt.strftime('%Y-%m-%d')
+        display_df['Exit Date'] = display_df['Exit Date'].dt.strftime('%Y-%m-%d')
+        
+        st.dataframe(display_df, use_container_width=True)
