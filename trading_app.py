@@ -516,6 +516,32 @@ def bootstrap_sharpe_ci(returns, n_boots=1000, confidence=0.95):
     
     return lower, upper, sharpes
 
+# ============================================================
+# CUSTOM METRIC STYLING
+# ============================================================
+st.markdown("""
+<style>
+[data-testid="stMetric"] {
+    border-left: 2px solid #00FFB2;  
+    padding: 0.75rem 1rem;  
+}
+
+[data-testid="stMetricValue"] {
+    font-size: 1.75rem !important;  
+    letter-spacing: -0.02em !important;  
+    font-feature-settings: 'tnum', 'zero' !important;  
+}
+</style>
+""", unsafe_allow_html=True)
+
+# 2D MONTE CARLO - CRYSTAL CLEAR
+st.markdown("## 03 — MONTE CARLO ROBUSTNESS ANALYSIS")
+
+# Run Monte Carlo bootstrap
+n_mc_sims = 500
+mc_paths = []
+# ... (the rest of your Monte Carlo code continues here) ...
+
 
 # 2D MONTE CARLO - CRYSTAL CLEAR
 st.markdown("## 03 — MONTE CARLO ROBUSTNESS ANALYSIS")
@@ -524,6 +550,8 @@ st.markdown("## 03 — MONTE CARLO ROBUSTNESS ANALYSIS")
 n_mc_sims = 500
 mc_paths = []
 net_rets = results_df['net_ret'].values
+
+cum_bench = (1 + results_df['bench_ret']).cumprod()
 
 for _ in range(n_mc_sims):
     boot_rets = np.random.choice(net_rets, size=len(net_rets), replace=True)
