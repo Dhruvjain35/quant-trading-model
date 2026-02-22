@@ -526,44 +526,50 @@ if st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True):
     # ==========================================
     # 08 - SHAP FEATURE ATTRIBUTION
     # ==========================================
-    st.markdown("<h2>08 — SHAP FEATURE ATTRIBUTION (GAME-THEORETIC)</h2>", unsafe_allow_html=True)
-    st.caption("SHapley Additive exPlanations decompose predictions into feature contributions.")
-    
-    with st.spinner("Calculating SHAP values..."):
-        # Use a small sample of test data to prevent Streamlit from hanging
-        X_test_sample = test_df[feat_cols].sample(n=min(500, len(test_df)), random_state=42)
-        explainer = shap.TreeExplainer(rf_model)
-        shap_values = explainer.shap_values(X_test_sample)
-        
-        # In sklearn > 1.0, shap_values for binary classification is often a list of arrays [class_0, class_1]
-        if isinstance(shap_values, list):
-            shap_values = shap_values[1] # Take positive class
-            
-    c_s1, c_s2 = st.columns(2)
-    
-    # Matplotlib wrapper for SHAP
-    def st_shap(plot, height=None):
-        shap_html = f"<head>{shap.getjs()}</head><body>{plot.html()}</body>"
-        st.components.v1.html(shap_html, height=height)
+    # ==========================================
+# 08 - SHAP FEATURE ATTRIBUTION
+# ==========================================
+st.markdown("<h2>08 — SHAP FEATURE ATTRIBUTION (GAME-THEORETIC)</h2>", unsafe_allow_html=True)
 
-    with c_s1:
-        st.markdown("<p style='text-align:center; font-weight:bold;'>Feature Importance (Mean |SHAP|)</p>", unsafe_allow_html=True)
-        fig, ax = plt.subplots(figsize=(6, 5))
-        fig.patch.set_facecolor('#0A0E14')
-        ax.set_facecolor('#0A0E14')
-        ax.xaxis.label.set_color('#EBEEF5')
-        ax.yaxis.label.set_color('#EBEEF5')
-        ax.tick_params(colors='#EBEEF5')
-        shap.summary_plot(shap_values, X_test_sample, plot_type="bar", show=False, color='#7C4DFF')
-        st.pyplot(fig)
-        
-    with c_s2:
-        st.markdown("<p style='text-align:center; font-weight:bold;'>SHAP Beeswarm (Direction)</p>", unsafe_allow_html=True)
-        fig, ax = plt.subplots(figsize=(6, 5))
-        fig.patch.set_facecolor('#0A0E14')
-        ax.set_facecolor('#0A0E14')
-        ax.xaxis.label.set_color('#EBEEF5')
-        ax.yaxis.label.set_color('#EBEEF5')
-        ax.tick_params(colors='#EBEEF5')
-        shap.summary_plot(shap_values, X_test_sample, show=False)
-        st.pyplot(fig)
+with st.spinner("Calculating SHAP values..."):
+    # SHAP takes heavy compute, so we sample 500 rows max
+    X_test_sample = test_df[feat_cols].sample(n=min(500, len(test_df)), random_state=42)
+    
+    explainer = shap.TreeExplainer(rf_model)
+    shap_values = explainer.shap_values(X_test_sample)
+    
+    # Sklearn Random Forest returns a list of arrays. We want the 'Up' class (index 1).
+    if isinstance(shap_values, list):
+        shap_values = shap_values[1]
+
+c_s1, c_s2 = st.columns(2)
+
+with c_s1:
+    st.markdown("<p style='text-align:center; font-weight:bold;'>Feature Importance (Bar)</p>", unsafe_allow_html=True)
+    plt.figure(figsize=(6, 5)) # Create fresh global figure
+    
+    # SHAP draws on the global figure
+    shap.summary_plot(shap_values, X_test_sample, plot_type="bar", show=False, color='#7C4DFF')
+    fig1 = plt.gcf() # Grab the global figure
+    
+    # Dark mode styling
+    fig1.patch.set_facecolor('#0A0E14')
+    plt.gca().set_facecolor('#0A0E14')
+    plt.gca().tick_params(colors='#EBEEF5')
+    plt.gca().xaxis.label.set_color('#EBEEF5')
+    
+    st.pyplot(fig1, clear_figure=True)
+
+with c_s2:
+    st.markdown("<p style='text-align:center; font-weight:bold;'>SHAP Beeswarm</p>", unsafe_allow_html=True)
+    plt.figure(figsize=(6, 5))
+    
+    shap.summary_plot(shap_values, X_test_sample, show=False)
+    fig2 = plt.gcf()
+    
+    fig2.patch.set_facecolor('#0A0E14')
+    plt.gca().set_facecolor('#0A0E14')
+    plt.gca().tick_params(colors='#EBEEF5')
+    plt.gca().xaxis.label.set_color('#EBEEF5')
+    
+    st.pyplot(fig2, clear_figure=True)
