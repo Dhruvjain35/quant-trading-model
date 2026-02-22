@@ -1,6 +1,6 @@
 """
-ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v5.0
-THE BALANCED MODEL - DEEP HISTORY WITH ASYMMETRIC RECOVERY
+ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v6.0
+THE ALPHA MODEL - ASYMMETRIC THRESHOLDS & LONG DURATION SAFETY
 """
 
 import streamlit as st
@@ -49,15 +49,22 @@ def load_data(risk, safe):
 def engineer_features(df):
     data = df.copy()
     
-    # Target: 1-day forward return (NO LEAKAGE)
+    # Target: 1-day forward return 
     data['Fwd_Ret'] = data['Risk'].shift(-1) / data['Risk'] - 1
     data['Target'] = (data['Fwd_Ret'] > 0).astype(int)
     
-    # ENHANCED MACRO FEATURES
-    data['Mom_1M'] = data['Risk'].pct_change(21) # Fast momentum to catch V-bottoms
-    data['Mom_3M'] = data['Risk'].pct_change(63) # Slow momentum
+    # KINETIC MACRO FEATURES
+    data['Mom_1M'] = data['Risk'].pct_change(21)
+    data['Mom_3M'] = data['Risk'].pct_change(63)
     data['MA_200_Dist'] = data['Risk'] / data['Risk'].rolling(200).mean() - 1
     data['Yield_Mom'] = data['Yield'].pct_change(21)
+    
+    # RSI (Mean Reversion - helps AI buy the dip)
+    delta = data['Risk'].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = -1 * delta.clip(upper=0).rolling(14).mean()
+    rs = gain / loss
+    data['RSI_14'] = 100 - (100 / (1 + rs))
     
     # Volatility Regimes
     data['Risk_Vol'] = data['Risk'].pct_change().rolling(21).std()
@@ -66,7 +73,7 @@ def engineer_features(df):
     data['Vol_Ratio_MA'] = data['Vol_Ratio'].rolling(63).mean()
     
     data.dropna(inplace=True)
-    features = ['Mom_1M', 'Mom_3M', 'MA_200_Dist', 'Yield_Mom', 'Vol_Ratio']
+    features = ['Mom_1M', 'Mom_3M', 'MA_200_Dist', 'Yield_Mom', 'Vol_Ratio', 'RSI_14']
     return data, features
 
 def train_ensemble(data, features, embargo):
@@ -83,7 +90,7 @@ def train_ensemble(data, features, embargo):
     X_tr, y_tr = train[features], train['Target']
     X_te = test[features]
     
-    # BALANCED REGULARIZATION: Depth=3. Smart enough to learn, dumb enough to not overfit.
+    # Model configuration
     rf = RandomForestClassifier(n_estimators=100, max_depth=3, min_samples_leaf=15, random_state=42)
     gb = GradientBoostingClassifier(n_estimators=100, max_depth=3, learning_rate=0.01, random_state=42)
     
@@ -94,19 +101,17 @@ def train_ensemble(data, features, embargo):
     prob_gb = gb.predict_proba(X_te)[:,1]
     
     test['Prob_Avg'] = (prob_rf + prob_gb) / 2
-    
-    # Smooth predictions
     test['Prob_Smooth'] = test['Prob_Avg'].ewm(span=10).mean()
     
-    # Tighter Hysteresis Logic (More responsive to re-entering the market)
-    conditions = [test['Prob_Smooth'] > 0.51, test['Prob_Smooth'] < 0.49]
+    # ASYMMETRIC BULL BIAS: Default to LONG. High conviction required to sell.
+    conditions = [test['Prob_Smooth'] > 0.48, test['Prob_Smooth'] < 0.43]
     choices = [1, 0]
     test['Raw_Signal'] = np.select(conditions, choices, default=np.nan)
     test['Signal'] = test['Raw_Signal'].ffill().fillna(1)
     
-    # RELAXED MACRO OVERRIDE
-    # Only veto if the asset is deeply broken (-2% under MA) AND vol is severely expanding (+5% over MA)
-    crash_condition = (test['MA_200_Dist'] < -0.02) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.05)
+    # SMART MACRO OVERRIDE
+    # Only sell if broken trend AND vol expanding AND NOT heavily oversold (RSI > 35)
+    crash_condition = (test['MA_200_Dist'] < -0.02) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.05) & (test['RSI_14'] > 35)
     test.loc[crash_condition, 'Signal'] = 0
     
     return test, rf, train, test
@@ -142,10 +147,11 @@ def stats(rets):
     return sh, sort, tot, ann, dd
 
 # SIDEBAR
-st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V5.0</h3></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V6.0 ALPHA</h3></div>", unsafe_allow_html=True)
 st.sidebar.markdown("**Model Controls**")
 risk = st.sidebar.text_input("High-Beta Asset", "^NDX")
-safe = st.sidebar.text_input("Risk-Free Asset", "VFISX")
+# SWAPPED TO LONG-DURATION TREASURIES FOR POSITIVE CRISIS ALPHA
+safe = st.sidebar.text_input("Risk-Free Asset", "VUSTX") 
 embargo = st.sidebar.slider("Purged Embargo (Months)", 0, 12, 4)
 mc = st.sidebar.number_input("Monte Carlo Sims", 100, 2000, 500, 100)
 st.sidebar.markdown("---")
@@ -172,7 +178,7 @@ if not run:
     st.stop()
 
 # EXECUTE
-with st.status("Booting AMCE Balanced Model...", expanded=True) as status:
+with st.status("Booting AMCE Alpha Model...", expanded=True) as status:
     st.write("1/4: Loading historical data...")
     t0 = time.time()
     raw = load_data(risk, safe)
@@ -416,4 +422,4 @@ if len(test_df) > 100:
         st.pyplot(f, clear_figure=True)
 
 st.markdown("---")
-st.markdown("<p style='text-align:center;color:#8B95A8;font-size:0.75rem;'>AMCE v5.0 | BALANCED OOS VALIDATION | ASYMMETRIC RECOVERY | NOT FINANCIAL ADVICE</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;color:#8B95A8;font-size:0.75rem;'>AMCE v6.0 | ALPHA OOS VALIDATION | ASYMMETRIC LONG BIAS | NOT FINANCIAL ADVICE</p>", unsafe_allow_html=True)
