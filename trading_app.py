@@ -1,6 +1,6 @@
 """
 ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v3.0
-THE LEGENDARY MODEL - OOS WITH HYSTERESIS & MACRO FEATURES
+THE LEGENDARY MODEL - STRICT OOS WITH MACRO OVERRIDE
 """
 
 import streamlit as st
@@ -49,32 +49,24 @@ def load_data(risk, safe):
 def engineer_features(df):
     data = df.copy()
     
-    # 1-day forward return for the backtester (NO LEAKAGE)
+    # Target: 1-day forward return (NO LEAKAGE)
     data['Fwd_Ret'] = data['Risk'].shift(-1) / data['Risk'] - 1
     data['Target'] = (data['Fwd_Ret'] > 0).astype(int)
     
-    # Standard Trend Features
-    data['Mom_1M'] = data['Risk'].pct_change(21)
+    # STRIPPED DOWN MACRO FEATURES (Removing noise)
     data['Mom_3M'] = data['Risk'].pct_change(63)
-    data['MA_50_Dist'] = data['Risk'] / data['Risk'].rolling(50).mean() - 1
-    
-    # ADVANCED MACRO FEATURES (This is where the alpha lives)
-    # VIX Z-Score (measures relative panic, not absolute level)
-    data['VIX_Z'] = (data['VIX'] - data['VIX'].rolling(63).mean()) / data['VIX'].rolling(63).std()
-    
-    # Yield Momentum (Detects rate shock environments like 2022)
+    data['MA_200_Dist'] = data['Risk'] / data['Risk'].rolling(200).mean() - 1
     data['Yield_Mom'] = data['Yield'].pct_change(21)
     
-    # Rolling Volatility & Cross-Asset Correlation
+    # Volatility Regimes
     data['Risk_Vol'] = data['Risk'].pct_change().rolling(21).std()
     data['Safe_Vol'] = data['Safe'].pct_change().rolling(21).std()
     data['Vol_Ratio'] = data['Risk_Vol'] / data['Safe_Vol']
-    
-    # Correlation between Tech and Bonds (When both fall, it's a liquidity trap)
-    data['Corr_RS'] = data['Risk'].pct_change(5).rolling(63).corr(data['Safe'].pct_change(5))
+    data['Vol_Ratio_MA'] = data['Vol_Ratio'].rolling(63).mean()
     
     data.dropna(inplace=True)
-    features = ['Mom_1M', 'Mom_3M', 'MA_50_Dist', 'VIX_Z', 'Yield_Mom', 'Risk_Vol', 'Safe_Vol', 'Vol_Ratio', 'Corr_RS']
+    # Kept to the absolute most predictive macro pillars
+    features = ['Mom_3M', 'MA_200_Dist', 'Yield_Mom', 'Vol_Ratio']
     return data, features
 
 def train_ensemble(data, features, embargo):
@@ -91,32 +83,31 @@ def train_ensemble(data, features, embargo):
     X_tr, y_tr = train[features], train['Target']
     X_te = test[features]
     
-    # Deepened the trees slightly since we have smarter features
-    rf = RandomForestClassifier(n_estimators=200, max_depth=6, min_samples_leaf=10, random_state=42)
-    gb = GradientBoostingClassifier(n_estimators=200, max_depth=3, learning_rate=0.05, random_state=42)
+    # EXTREME REGULARIZATION: max_depth=2. Forcing the AI to find broad regimes, not overfit.
+    rf = RandomForestClassifier(n_estimators=100, max_depth=2, min_samples_leaf=20, random_state=42)
+    gb = GradientBoostingClassifier(n_estimators=100, max_depth=2, learning_rate=0.01, random_state=42)
     
     rf.fit(X_tr, y_tr)
     gb.fit(X_tr, y_tr)
     
-    # PREDICT STRICTLY ON OOS DATA
     prob_rf = rf.predict_proba(X_te)[:,1]
     prob_gb = gb.predict_proba(X_te)[:,1]
     
-    test['Prob_RF'] = prob_rf
-    test['Prob_GB'] = prob_gb
     test['Prob_Avg'] = (prob_rf + prob_gb) / 2
     
-    # HYSTERESIS BAND logic (Slashing turnover and slippage)
-    # Smooth the probability so we don't react to 1-day noise
+    # Smooth predictions to kill daily transaction costs
     test['Prob_Smooth'] = test['Prob_Avg'].ewm(span=10).mean()
     
-    # Only change position if conviction is high. Otherwise, hold previous state.
+    # Hysteresis Logic
     conditions = [test['Prob_Smooth'] > 0.52, test['Prob_Smooth'] < 0.48]
     choices = [1, 0]
     test['Raw_Signal'] = np.select(conditions, choices, default=np.nan)
-    
-    # Forward fill the NaNs to maintain the current position
     test['Signal'] = test['Raw_Signal'].ffill().fillna(1)
+    
+    # THE MACRO OVERRIDE (Trend Following Veto)
+    # If the asset is below its 200-day MA AND volatility is expanding, kill the long signal.
+    crash_condition = (test['MA_200_Dist'] < 0) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'])
+    test.loc[crash_condition, 'Signal'] = 0
     
     return test, rf, train, test
 
