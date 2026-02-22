@@ -1,6 +1,6 @@
 """
 ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v3.0
-THE LEGENDARY MODEL - STRICT OUT-OF-SAMPLE OOS (NO LEAKAGE)
+THE LEGENDARY MODEL - OOS WITH HYSTERESIS & MACRO FEATURES
 """
 
 import streamlit as st
@@ -48,23 +48,33 @@ def load_data(risk, safe):
 
 def engineer_features(df):
     data = df.copy()
-    # FIX 1: Shift(-1) perfectly matches daily trading backtest.
+    
+    # 1-day forward return for the backtester (NO LEAKAGE)
     data['Fwd_Ret'] = data['Risk'].shift(-1) / data['Risk'] - 1
     data['Target'] = (data['Fwd_Ret'] > 0).astype(int)
     
+    # Standard Trend Features
     data['Mom_1M'] = data['Risk'].pct_change(21)
     data['Mom_3M'] = data['Risk'].pct_change(63)
-    data['Mom_6M'] = data['Risk'].pct_change(126)
-    data['Safe_Mom'] = data['Safe'].pct_change(63)
-    data['Rel_Str'] = data['Mom_3M'] - data['Safe'].pct_change(63)
-    data['MA_50'] = data['Risk'] / data['Risk'].rolling(50).mean() - 1
-    data['MA_200'] = data['Risk'] / data['Risk'].rolling(200).mean() - 1
-    data['Dist_Max_6M'] = data['Risk'] / data['Risk'].rolling(126).max() - 1
-    data['VIX_Proxy'] = data['VIX'].rolling(10).mean() / data['VIX'].rolling(60).mean() - 1
-    data['Yield_Chg'] = data['Yield'].diff(21)
+    data['MA_50_Dist'] = data['Risk'] / data['Risk'].rolling(50).mean() - 1
+    
+    # ADVANCED MACRO FEATURES (This is where the alpha lives)
+    # VIX Z-Score (measures relative panic, not absolute level)
+    data['VIX_Z'] = (data['VIX'] - data['VIX'].rolling(63).mean()) / data['VIX'].rolling(63).std()
+    
+    # Yield Momentum (Detects rate shock environments like 2022)
+    data['Yield_Mom'] = data['Yield'].pct_change(21)
+    
+    # Rolling Volatility & Cross-Asset Correlation
+    data['Risk_Vol'] = data['Risk'].pct_change().rolling(21).std()
+    data['Safe_Vol'] = data['Safe'].pct_change().rolling(21).std()
+    data['Vol_Ratio'] = data['Risk_Vol'] / data['Safe_Vol']
+    
+    # Correlation between Tech and Bonds (When both fall, it's a liquidity trap)
+    data['Corr_RS'] = data['Risk'].pct_change(5).rolling(63).corr(data['Safe'].pct_change(5))
     
     data.dropna(inplace=True)
-    features = ['Mom_1M','Mom_3M','Mom_6M','Safe_Mom','Rel_Str','MA_50','MA_200','Dist_Max_6M','VIX_Proxy','Yield_Chg']
+    features = ['Mom_1M', 'Mom_3M', 'MA_50_Dist', 'VIX_Z', 'Yield_Mom', 'Risk_Vol', 'Safe_Vol', 'Vol_Ratio', 'Corr_RS']
     return data, features
 
 def train_ensemble(data, features, embargo):
@@ -76,18 +86,19 @@ def train_ensemble(data, features, embargo):
         test_start = split + 1
     
     train = data.iloc[:split]
-    test = data.iloc[test_start:].copy() # explicit copy for safety
+    test = data.iloc[test_start:].copy()
     
     X_tr, y_tr = train[features], train['Target']
     X_te = test[features]
     
-    rf = RandomForestClassifier(n_estimators=150, max_depth=5, min_samples_leaf=10, random_state=42)
-    gb = GradientBoostingClassifier(n_estimators=150, max_depth=3, learning_rate=0.05, random_state=42)
+    # Deepened the trees slightly since we have smarter features
+    rf = RandomForestClassifier(n_estimators=200, max_depth=6, min_samples_leaf=10, random_state=42)
+    gb = GradientBoostingClassifier(n_estimators=200, max_depth=3, learning_rate=0.05, random_state=42)
     
     rf.fit(X_tr, y_tr)
     gb.fit(X_tr, y_tr)
     
-    # FIX 2: NO DATA LEAKAGE. ONLY PREDICT ON X_te (OUT OF SAMPLE)
+    # PREDICT STRICTLY ON OOS DATA
     prob_rf = rf.predict_proba(X_te)[:,1]
     prob_gb = gb.predict_proba(X_te)[:,1]
     
@@ -95,11 +106,18 @@ def train_ensemble(data, features, embargo):
     test['Prob_GB'] = prob_gb
     test['Prob_Avg'] = (prob_rf + prob_gb) / 2
     
-    # Smooth signal to survive daily friction
-    test['Prob_Smooth'] = test['Prob_Avg'].ewm(span=5).mean()
-    test['Signal'] = (test['Prob_Smooth'] > 0.50).astype(int)
+    # HYSTERESIS BAND logic (Slashing turnover and slippage)
+    # Smooth the probability so we don't react to 1-day noise
+    test['Prob_Smooth'] = test['Prob_Avg'].ewm(span=10).mean()
     
-    # Return ONLY the test set to run through the backtester
+    # Only change position if conviction is high. Otherwise, hold previous state.
+    conditions = [test['Prob_Smooth'] > 0.52, test['Prob_Smooth'] < 0.48]
+    choices = [1, 0]
+    test['Raw_Signal'] = np.select(conditions, choices, default=np.nan)
+    
+    # Forward fill the NaNs to maintain the current position
+    test['Signal'] = test['Raw_Signal'].ffill().fillna(1)
+    
     return test, rf, train, test
 
 def backtest(data, cost_bps, slip_bps):
@@ -107,10 +125,13 @@ def backtest(data, cost_bps, slip_bps):
     df['R_ret'] = df['Risk'].pct_change()
     df['S_ret'] = df['Safe'].pct_change()
     df['Pos'] = df['Signal'].shift(1).fillna(1)
+    
     df['Gross'] = np.where(df['Pos']==1, df['R_ret'], df['S_ret'])
     df['Turn'] = df['Pos'].diff().abs()
+    
     df['Cost'] = df['Turn'] * (cost_bps + slip_bps) / 10000
     df['Net'] = df['Gross'] - df['Cost']
+    
     df['Eq_Strat'] = (1 + df['Net'].fillna(0)).cumprod()
     df['Eq_Risk'] = (1 + df['R_ret'].fillna(0)).cumprod()
     df['DD_Strat'] = df['Eq_Strat'] / df['Eq_Strat'].cummax() - 1
@@ -172,7 +193,6 @@ with st.status("Booting AMCE...", expanded=True) as status:
     
     st.write("3/4: Training ensemble...")
     t1 = time.time()
-    # FIX 3: test_data is now ONLY the strict out-of-sample data
     test_data, rf_model, train_df, test_df = train_ensemble(data, feats, embargo)
     st.write(f"✅ Models: {len(train_df)} train, {len(test_df)} test ({time.time()-t1:.1f}s)")
     
