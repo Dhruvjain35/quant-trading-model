@@ -57,55 +57,58 @@ def load_data(risk, safe):
 
 def engineer_features(df):
     data = df.copy()
-    data['Target'] = (data['Risk'].shift(-3) / data['Risk'] - 1 > 0).astype(int)
-    data['Mom_5'] = data['Risk'].pct_change(5)
-    data['Mom_20'] = data['Risk'].pct_change(20)
-    data['Mom_60'] = data['Risk'].pct_change(60)
+    
+    # Target: 10-day forward return > 0. Strict out of sample, dropna prevents leakage.
+    data['Target'] = (data['Risk'].shift(-10) / data['Risk'] - 1 > 0).astype(int)
+    
+    # Core Macro & Regime Features
+    data['Trend_200'] = data['Risk'] / data['Risk'].rolling(200).mean() - 1
+    data['Trend_50'] = data['Risk'] / data['Risk'].rolling(50).mean() - 1
+    data['Safe_Trend'] = data['Safe'] / data['Safe'].rolling(50).mean() - 1
+    data['VIX_Stretch'] = data['VIX'] / data['VIX'].rolling(20).mean() - 1
     data['Vol_20'] = data['Risk'].pct_change().rolling(20).std() * np.sqrt(252)
-    data['Vol_60'] = data['Risk'].pct_change().rolling(60).std() * np.sqrt(252)
-    data['Vol_Ratio'] = data['Vol_20'] / (data['Vol_60'] + 1e-9)
-    data['DD'] = (data['Risk'] / data['Risk'].rolling(126).max()) - 1
-    data['VIX_MA'] = data['VIX'].rolling(10).mean()
-    data['Safe_Mom'] = data['Safe'].pct_change(20)
+    
+    # Internal RSI Approximation (14-day)
+    delta = data['Risk'].diff()
+    gain = delta.where(delta > 0, 0).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / (loss + 1e-9)
+    data['RSI_14'] = 100 - (100 / (1 + rs))
+    
+    # Drop NaNs to ensure no missing data and no target leakage at the tail
     data = data.dropna()
-    features = ['Mom_5','Mom_20','Mom_60','Vol_20','Vol_Ratio','DD','VIX_MA','Safe_Mom']
+    features = ['Trend_200', 'Trend_50', 'Safe_Trend', 'VIX_Stretch', 'Vol_20', 'RSI_14']
     return data, features
 
 def train_model(data, features):
-    # 60/40 split with 6-month gap
+    # 60/40 split with 6-month gap to prevent lookahead overlap
     split = int(len(data) * 0.60)
-    gap = 126  # 6 months
+    gap = 126  
     
     train = data.iloc[:split]
     test = data.iloc[split+gap:]
     
     X_tr, y_tr = train[features], train['Target']
     
-    # 3 models
-    rf = RandomForestClassifier(n_estimators=100, max_depth=6, min_samples_leaf=15, random_state=42)
-    gb = GradientBoostingClassifier(n_estimators=100, max_depth=4, learning_rate=0.08, random_state=42)
+    # Tuned to prevent overfitting: Shallower trees, more samples per leaf
+    rf = RandomForestClassifier(n_estimators=100, max_depth=5, min_samples_leaf=40, random_state=42)
+    gb = GradientBoostingClassifier(n_estimators=100, max_depth=3, learning_rate=0.05, random_state=42)
     
     scaler = StandardScaler()
     X_tr_sc = scaler.fit_transform(X_tr)
     
-    rf.fit(X_tr, y_tr)
-    gb.fit(X_tr, y_tr)
+    rf.fit(X_tr_sc, y_tr)
+    gb.fit(X_tr_sc, y_tr)
     
-    # Predict ONLY on test
     X_te = test[features]
     X_te_sc = scaler.transform(X_te)
     
-    prob_rf = rf.predict_proba(X_te)[:,1]
-    prob_gb = gb.predict_proba(X_te)[:,1]
+    prob_rf = rf.predict_proba(X_te_sc)[:,1]
+    prob_gb = gb.predict_proba(X_te_sc)[:,1]
     prob_avg = (prob_rf + prob_gb) / 2
     
-    # Initialize full dataset with neutral
     data['Prob'] = 0.50
-    data['Signal'] = 0
-    
-    # Assign test predictions only
     data.loc[test.index, 'Prob'] = prob_avg
-    data.loc[test.index, 'Signal'] = (prob_avg > 0.52).astype(int)
     
     return data, train, test
 
@@ -127,27 +130,33 @@ def backtest(data, tc_bps, tax_st, slip_bps):
         if pos == 1:
             gain = (price / entry) - 1
             tax_cost = max(0, gain * tax_st)
-            threshold = 0.50 - (tax_cost * 1.5)
-            threshold = max(0.30, threshold)
+            
+            # HYSTERESIS: Require high conviction to sell and pay taxes
+            threshold = 0.48 - tax_cost
+            threshold = max(0.35, threshold)
             
             if prob < threshold:
                 pos = 0
                 if gain > 0:
                     tax = gain * tax_st
         else:
-            if prob > 0.52:
+            # HYSTERESIS: Require high conviction to buy back in
+            if prob > 0.53:
                 pos = 1
                 entry = price
-        
+                
         positions.append(pos)
         taxes.append(tax)
     
+    # Shift position by 1 to prevent lookahead (signal at close executes next day)
     df['Pos'] = pd.Series(positions, index=df.index).shift(1).fillna(1)
     df['Tax'] = pd.Series(taxes, index=df.index).fillna(0)
+    
     df['Gross'] = np.where(df['Pos']==1, df['R_ret'], df['S_ret'])
     df['Turn'] = df['Pos'].diff().abs()
     df['Cost'] = df['Turn'] * (tc_bps + slip_bps) / 10000
     df['Net'] = df['Gross'] - df['Cost'] - df['Tax']
+    
     df['Eq_Strat'] = (1 + df['Net'].fillna(0)).cumprod()
     df['Eq_Risk'] = (1 + df['R_ret'].fillna(0)).cumprod()
     df['DD_Strat'] = df['Eq_Strat'] / df['Eq_Strat'].cummax() - 1
