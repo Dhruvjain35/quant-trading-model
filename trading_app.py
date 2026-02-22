@@ -1,6 +1,6 @@
 """
-ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) 
-V8.3 - MACRO CASH HURDLE EDITION
+ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v8.2
+THE MASTER BUILD - ALL SECTIONS RESTORED
 """
 
 import streamlit as st
@@ -14,6 +14,7 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 import shap
 import matplotlib.pyplot as plt
 import warnings
+import time
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="AMCE Terminal", page_icon="▲", layout="wide", initial_sidebar_state="expanded")
@@ -51,12 +52,7 @@ def engineer_features(df):
     data['Target'] = (data['Fwd_Ret'] > 0).astype(int)
     data['Mom_1M'] = data['Risk'].pct_change(21)
     data['Mom_3M'] = data['Risk'].pct_change(63)
-    
-    data['MA_50'] = data['Risk'].rolling(50).mean()
-    data['MA_200'] = data['Risk'].rolling(200).mean()
-    data['MA_50_Dist'] = data['Risk'] / data['MA_50'] - 1
-    data['MA_200_Dist'] = data['Risk'] / data['MA_200'] - 1
-    
+    data['MA_200_Dist'] = data['Risk'] / data['Risk'].rolling(200).mean() - 1
     data['Yield_Mom'] = data['Yield'].pct_change(21)
     data['Yield_Trend'] = data['Yield'] > data['Yield'].rolling(63).mean() 
     
@@ -104,47 +100,23 @@ def train_ensemble(data, features, embargo):
     test['Raw_Signal'] = np.select(conditions, choices, default=np.nan)
     test['Signal'] = test['Raw_Signal'].ffill().fillna(1)
     
-    # V8.2 Baseline Circuit Breaker
-    risk_off = (test['MA_200_Dist'] < -0.02) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.05)
-    
-    # NEW: The Macro Cash Hurdle
-    # 3-Month Cash Yield approximation
-    test['Cash_Yield_3M'] = (test['Yield'] / 100) * (63 / 252) 
-    
-    # If 3-month equity momentum is worse than 3-month cash yield, AND we aren't seeing a violent 1-month recovery (>3%)
-    cash_hurdle_fail = (test['Mom_3M'] < test['Cash_Yield_3M']) & (test['Mom_1M'] < 0.03)
-    
-    test.loc[risk_off | cash_hurdle_fail, 'Signal'] = 0
+    risk_off = (test['MA_200_Dist'] < -0.02) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.05) & (test['RSI_14'] > 35)
+    panic = ((test['MA_200_Dist'] < -0.10) | (test['Mom_1M'] < -0.15)) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.15)
+    test.loc[risk_off | panic, 'Signal'] = 0
     
     return test, rf, train, test
 
-def backtest(data, cost_bps, slip_bps, target_vol_pct):
+def backtest(data, cost_bps, slip_bps):
     df = data.copy()
-    df['R_ret'] = df['Risk'].pct_change().fillna(0)
-    df['S_ret'] = df['Safe'].pct_change().fillna(0)
+    df['R_ret'] = df['Risk'].pct_change()
+    df['S_ret'] = df['Safe'].pct_change()
     df['Cash_ret'] = (df['Yield'] / 100) / 252 
-    
-    # Volatility Calculations (Classic v8.2)
-    df['Realized_Vol'] = df['R_ret'].rolling(21).std() * np.sqrt(252)
-    df['Realized_Vol'] = df['Realized_Vol'].replace(0, 0.001) 
-    target_vol_dec = target_vol_pct / 100.0
-    df['Vol_Scalar'] = target_vol_dec / df['Realized_Vol']
-    df['Vol_Scalar'] = df['Vol_Scalar'].clip(upper=1.0) 
-    
-    df['Signal_Shift'] = df['Signal'].shift(1).fillna(1)
-    df['Vol_Scalar_Shift'] = df['Vol_Scalar'].shift(1).fillna(1.0)
-    
-    # Baseline Weighting
-    df['W_Risk'] = df['Signal_Shift'] * df['Vol_Scalar_Shift']
-    df['W_Safe'] = 1.0 - df['W_Risk']
-    
+    df['Pos'] = df['Signal'].shift(1).fillna(1)
     df['Yield_Trend_Shift'] = df['Yield_Trend'].shift(1).fillna(False)
-    df['Defensive_Ret'] = np.where(df['Yield_Trend_Shift'], df['Cash_ret'], df['S_ret'])
     
-    df['Gross'] = (df['W_Risk'] * df['R_ret']) + (df['W_Safe'] * df['Defensive_Ret'])
-    
-    # Friction
-    df['Turn'] = df['W_Risk'].diff().abs() 
+    df['Gross'] = np.where(df['Pos']==1, df['R_ret'], 
+                  np.where(df['Yield_Trend_Shift'], df['Cash_ret'], df['S_ret']))
+    df['Turn'] = df['Pos'].diff().abs()
     df['Cost'] = df['Turn'] * (cost_bps + slip_bps) / 10000
     df['Net'] = df['Gross'] - df['Cost']
     
@@ -152,9 +124,6 @@ def backtest(data, cost_bps, slip_bps, target_vol_pct):
     df['Eq_Risk'] = (1 + df['R_ret'].fillna(0)).cumprod()
     df['DD_Strat'] = df['Eq_Strat'] / df['Eq_Strat'].cummax() - 1
     df['DD_Risk'] = df['Eq_Risk'] / df['Eq_Risk'].cummax() - 1
-    
-    df['Pos'] = df['Signal_Shift']
-    
     return df
 
 def stats(rets):
@@ -170,12 +139,11 @@ def stats(rets):
     return sh, sort, tot, ann, dd
 
 # SIDEBAR
-st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V8.3 CASH HURDLE</h3></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V8.2 MASTER</h3></div>", unsafe_allow_html=True)
 st.sidebar.markdown("**Model Controls**")
 risk = st.sidebar.text_input("High-Beta Asset", "^NDX")
 safe = st.sidebar.text_input("Risk-Free Asset", "VUSTX") 
 embargo = st.sidebar.slider("Purged Embargo (Months)", 0, 12, 4)
-target_vol = st.sidebar.slider("Vol Target (%)", 10, 40, 15)
 mc = st.sidebar.number_input("Monte Carlo Sims", 100, 2000, 500, 100)
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Friction Simulation**")
@@ -184,26 +152,28 @@ slip = st.sidebar.slider("Slippage (BPS per trade)", 0, 50, 5)
 st.sidebar.markdown("---")
 run = st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True)
 
-# HOMESCREEN
+# HOMESCREEN (RESTORED)
 if not run:
     st.markdown("QUANTITATIVE RESEARCH LAB")
     st.markdown("<h1>Adaptive Macro-Conditional Ensemble</h1>", unsafe_allow_html=True)
-    st.caption("AMCE FRAMEWORK • V8.3 • MACRO CASH HURDLE ACTIVE")
+    st.caption("AMCE FRAMEWORK • REGIME FILTERED • ENSEMBLE VOTING • STATISTICAL VALIDATION")
     
     st.markdown("""
     <div style="background:rgba(124,77,255,0.1);padding:20px;border-radius:4px;border:1px solid rgba(124,77,255,0.2);margin-top:20px;">
-        <span style="color:#7C4DFF;font-weight:bold;">LOGIC UPDATE: THE CASH HURDLE</span><br><br>
-        We reverted to the stable v8.2 core. To fix the maximum drawdown, we introduced an opportunity cost filter. If the 3-month momentum of equities cannot beat the 3-month accrued yield of the risk-free rate, the model is structurally forbidden from taking equity risk (unless a violent +3% 1-month V-bottom triggers).
+        <span style="color:#7C4DFF;font-weight:bold;">RESEARCH HYPOTHESIS</span><br><br>
+        <b>H₀ (Null):</b> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.<br>
+        <b>H₁ (Alternative):</b> Integrating Regime Filtering (Trend) with Gradient Boosting signals generates positive crisis alpha and statistically significant risk-adjusted outperformance, net of taxes and fees.
+        <br><br><span style="color:#8B95A8;">Test: Signal permutation (n=1,000) | Threshold: p < 0.05 | Alpha via OLS on excess returns</span>
     </div>
     """, unsafe_allow_html=True)
     st.stop()
 
 # EXECUTE
-with st.status("Booting AMCE V8.3...", expanded=True) as status:
+with st.status("Booting AMCE V8.2 Master...", expanded=True) as status:
     raw = load_data(risk, safe)
     data, feats = engineer_features(raw)
     test_data, rf_model, train_df, test_df = train_ensemble(data, feats, embargo)
-    res = backtest(test_data, tc, slip, target_vol)
+    res = backtest(test_data, tc, slip)
     status.update(label="✅ Complete!", state="complete", expanded=False)
 
 # STATS
@@ -298,7 +268,7 @@ if c_data:
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
 
-# SHAP FEATURE ATTRIBUTION RESTORED
+# SHAP 
 st.markdown("<h2>05 — SHAP FEATURE ATTRIBUTION (GAME-THEORETIC)</h2>", unsafe_allow_html=True)
 try:
     with st.spinner("Calculating SHAP..."):
@@ -337,27 +307,23 @@ try:
 except Exception as e:
     st.error(f"Could not render SHAP plots. Exception: {e}")
 
-# FACTOR DECOMP
+# FACTOR DECOMP (RESTORED)
 st.markdown("<h2>06 — FACTOR DECOMPOSITION (OLS ALPHA) & STABILITY</h2>", unsafe_allow_html=True)
-try:
-    ols_df = res[['Net', 'R_ret']].dropna()
-    Y_ols = ols_df['Net']
-    X_ols = sm.add_constant(ols_df['R_ret'])
-    model = sm.OLS(Y_ols, X_ols).fit()
-    alpha = model.params['const'] * 252
-    beta = model.params['R_ret']
-    p_alpha = model.pvalues['const']
+Y = res['Net'].dropna()
+X = sm.add_constant(res['R_ret'].dropna())
+model = sm.OLS(Y, X).fit()
+alpha = model.params['const'] * 252
+beta = model.params['R_ret']
+p_alpha = model.pvalues['const']
 
-    st.markdown(f"""<div style='display:flex;gap:20px;margin-bottom:20px;'>
-    <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>ALPHA (ANN.)</div><div style='color:var(--accent);font-size:1.8rem;'>{alpha*100:+.2f}%</div><div style='font-size:0.6rem;color:#8B95A8;'>p={p_alpha:.3f}</div></div>
-    <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>MARKET BETA</div><div style='color:var(--purple);font-size:1.8rem;'>{beta:.3f}</div></div>
-    <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>R-SQUARED</div><div style='color:#EBEEF5;font-size:1.8rem;'>{model.rsquared:.3f}</div></div>
-    <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>SHARPE RATIO</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_s:.3f}</div></div>
-    </div>""", unsafe_allow_html=True)
-except Exception as e:
-    st.error(f"OLS calculation failed: {e}")
+st.markdown(f"""<div style='display:flex;gap:20px;margin-bottom:20px;'>
+<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>ALPHA (ANN.)</div><div style='color:var(--accent);font-size:1.8rem;'>{alpha*100:+.2f}%</div><div style='font-size:0.6rem;color:#8B95A8;'>p={p_alpha:.3f}</div></div>
+<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>MARKET BETA</div><div style='color:var(--purple);font-size:1.8rem;'>{beta:.3f}</div></div>
+<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>R-SQUARED</div><div style='color:#EBEEF5;font-size:1.8rem;'>{model.rsquared:.3f}</div></div>
+<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>SHARPE RATIO</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_s:.3f}</div></div>
+</div>""", unsafe_allow_html=True)
 
-# PERMUTATION TEST RESTORED
+# PERMUTATION TEST (RESTORED)
 st.markdown("<h2>07 — STATISTICAL SIGNIFICANCE (PERMUTATION TEST)</h2>", unsafe_allow_html=True)
 n_perm = 1000
 pos = res['Pos'].values
