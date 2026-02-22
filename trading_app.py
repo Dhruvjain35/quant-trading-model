@@ -1,6 +1,6 @@
 """
-ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v8.1
-UI HOTFIX & DYNAMIC SAFE HAVENS
+ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v8.2
+THE MASTER BUILD - ALL SECTIONS RESTORED
 """
 
 import streamlit as st
@@ -139,7 +139,7 @@ def stats(rets):
     return sh, sort, tot, ann, dd
 
 # SIDEBAR
-st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V8.1 UI HOTFIX</h3></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V8.2 MASTER</h3></div>", unsafe_allow_html=True)
 st.sidebar.markdown("**Model Controls**")
 risk = st.sidebar.text_input("High-Beta Asset", "^NDX")
 safe = st.sidebar.text_input("Risk-Free Asset", "VUSTX") 
@@ -152,13 +152,24 @@ slip = st.sidebar.slider("Slippage (BPS per trade)", 0, 50, 5)
 st.sidebar.markdown("---")
 run = st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True)
 
+# HOMESCREEN (RESTORED)
 if not run:
     st.markdown("QUANTITATIVE RESEARCH LAB")
     st.markdown("<h1>Adaptive Macro-Conditional Ensemble</h1>", unsafe_allow_html=True)
+    st.caption("AMCE FRAMEWORK • REGIME FILTERED • ENSEMBLE VOTING • STATISTICAL VALIDATION")
+    
+    st.markdown("""
+    <div style="background:rgba(124,77,255,0.1);padding:20px;border-radius:4px;border:1px solid rgba(124,77,255,0.2);margin-top:20px;">
+        <span style="color:#7C4DFF;font-weight:bold;">RESEARCH HYPOTHESIS</span><br><br>
+        <b>H₀ (Null):</b> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.<br>
+        <b>H₁ (Alternative):</b> Integrating Regime Filtering (Trend) with Gradient Boosting signals generates positive crisis alpha and statistically significant risk-adjusted outperformance, net of taxes and fees.
+        <br><br><span style="color:#8B95A8;">Test: Signal permutation (n=1,000) | Threshold: p < 0.05 | Alpha via OLS on excess returns</span>
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 # EXECUTE
-with st.status("Booting AMCE V8.1...", expanded=True) as status:
+with st.status("Booting AMCE V8.2 Master...", expanded=True) as status:
     raw = load_data(risk, safe)
     data, feats = engineer_features(raw)
     test_data, rf_model, train_df, test_df = train_ensemble(data, feats, embargo)
@@ -201,7 +212,7 @@ fig1.add_trace(go.Scatter(x=res.index, y=res['DD_Strat']*100, showlegend=False, 
 fig1.update_layout(height=600, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#EBEEF5'), yaxis=dict(type="log", title="Portfolio Value (x)"), yaxis2=dict(title="Drawdown %"), hovermode="x unified", legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(17,21,28,0.8)"))
 st.plotly_chart(fig1, use_container_width=True)
 
-# MONTE CARLO (RESTORED)
+# MONTE CARLO
 st.markdown("<h2>03 — MONTE CARLO ROBUSTNESS (BOOTSTRAPPED)</h2>", unsafe_allow_html=True)
 rets = res['Net'].dropna().values
 sims = np.random.choice(rets, size=(mc, len(rets)), replace=True)
@@ -257,7 +268,7 @@ if c_data:
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
 
-# SHAP (PROPERLY FIXED RENDERING)
+# SHAP 
 st.markdown("<h2>05 — SHAP FEATURE ATTRIBUTION (GAME-THEORETIC)</h2>", unsafe_allow_html=True)
 try:
     with st.spinner("Calculating SHAP..."):
@@ -265,7 +276,6 @@ try:
         exp = shap.TreeExplainer(rf_model)
         shap_vals = exp.shap_values(X_samp)
         
-        # Robust handling for different scikit-learn/SHAP version outputs
         if isinstance(shap_vals, list):
             shap_plot_data = shap_vals[1]
         elif len(shap_vals.shape) == 3:
@@ -296,3 +306,49 @@ try:
         plt.close(fig_bee)
 except Exception as e:
     st.error(f"Could not render SHAP plots. Exception: {e}")
+
+# FACTOR DECOMP (RESTORED)
+st.markdown("<h2>06 — FACTOR DECOMPOSITION (OLS ALPHA) & STABILITY</h2>", unsafe_allow_html=True)
+Y = res['Net'].dropna()
+X = sm.add_constant(res['R_ret'].dropna())
+model = sm.OLS(Y, X).fit()
+alpha = model.params['const'] * 252
+beta = model.params['R_ret']
+p_alpha = model.pvalues['const']
+
+st.markdown(f"""<div style='display:flex;gap:20px;margin-bottom:20px;'>
+<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>ALPHA (ANN.)</div><div style='color:var(--accent);font-size:1.8rem;'>{alpha*100:+.2f}%</div><div style='font-size:0.6rem;color:#8B95A8;'>p={p_alpha:.3f}</div></div>
+<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>MARKET BETA</div><div style='color:var(--purple);font-size:1.8rem;'>{beta:.3f}</div></div>
+<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>R-SQUARED</div><div style='color:#EBEEF5;font-size:1.8rem;'>{model.rsquared:.3f}</div></div>
+<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>SHARPE RATIO</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_s:.3f}</div></div>
+</div>""", unsafe_allow_html=True)
+
+# PERMUTATION TEST (RESTORED)
+st.markdown("<h2>07 — STATISTICAL SIGNIFICANCE (PERMUTATION TEST)</h2>", unsafe_allow_html=True)
+n_perm = 1000
+pos = res['Pos'].values
+br = res['R_ret'].values
+sr = res['S_ret'].values
+
+perm_sh = []
+np.random.seed(42)
+for _ in range(n_perm):
+    shuf = np.random.permutation(pos)
+    pr = np.where(shuf==1, br, sr)
+    p_sh, _, _, _, _ = stats(pd.Series(pr))
+    perm_sh.append(p_sh)
+
+perm_sh = np.array(perm_sh)
+p_val = (perm_sh >= sh_s).mean()
+
+mc1,mc2,mc3 = st.columns(3)
+mc1.markdown(f"<div style='background:var(--panel);padding:15px;border-left:2px solid var(--accent);'><div style='font-size:0.7rem;color:#8B95A8;'>ACTUAL SHARPE</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_s:.4f}</div></div>", unsafe_allow_html=True)
+mc2.markdown(f"<div style='background:var(--panel);padding:15px;border-left:2px solid var(--accent);'><div style='font-size:0.7rem;color:#8B95A8;'>PERMUTATION P-VALUE</div><div style='color:var(--accent);font-size:1.8rem;'>{p_val:.4f}</div></div>", unsafe_allow_html=True)
+mc3.markdown(f"<div style='background:var(--panel);padding:15px;border-left:2px solid var(--accent);'><div style='font-size:0.7rem;color:#8B95A8;'>RANDOM STRATEGIES BEATEN</div><div style='color:var(--accent);font-size:1.8rem;'>{(1-p_val)*100:.1f}%</div></div>", unsafe_allow_html=True)
+
+fig4 = go.Figure()
+fig4.add_trace(go.Histogram(x=perm_sh, nbinsx=50, marker_color='#2C3243'))
+fig4.add_vline(x=sh_s, line_color='#00FFB2', line_width=3)
+fig4.add_vline(x=np.percentile(perm_sh, 95), line_color='#FF3B6B', line_dash='dash', line_width=2)
+fig4.update_layout(height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#EBEEF5'), xaxis_title="Sharpe Ratio", yaxis_title="Frequency", showlegend=False)
+st.plotly_chart(fig4, use_container_width=True)
