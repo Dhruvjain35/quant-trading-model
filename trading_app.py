@@ -18,7 +18,7 @@ import shap
 import matplotlib.pyplot as plt
 import warnings
 from datetime import timedelta
-
+import time
 warnings.filterwarnings('ignore')
 st.set_page_config(page_title="AMCE Terminal", layout="wide", initial_sidebar_state="expanded")
 
@@ -240,18 +240,29 @@ st.sidebar.markdown("---")
 st.sidebar.caption("Regime-Filtered Boosting • Purged walk-forward validation • Ensemble voting • SHAP attribution • Permutation testing")
 
 if st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True):
-    with st.spinner("Processing High-Frequency Institutional Pipeline..."):
-        # Pipeline Execution
+    with st.status("Booting AMCE Quantitative Engine...", expanded=True) as status:
+        
+        st.write("📡 1/4: Pinging Yahoo Finance API for 20-year daily data...")
+        start_time = time.time()
         raw_df = get_market_data(risk_asset, safe_asset)
+        st.write(f"✅ Data secured in {time.time() - start_time:.2f} seconds. ({len(raw_df)} trading days)")
+        
+        st.write("⚙️ 2/4: Engineering Momentum & Volatility Features...")
         data, feat_cols = engineer_features(raw_df)
+        
+        st.write("🧠 3/4: Training Sklearn Random Forest & Gradient Boosting...")
+        ml_start = time.time()
         ml_data, rf_model, train_df, test_df = train_ensemble_model(data, feat_cols, embargo)
+        st.write(f"✅ Ensemble weights optimized in {time.time() - ml_start:.2f} seconds.")
+        
+        st.write("💸 4/4: Running Walk-Forward Backtest (Applying Taxes & Frictions)...")
         res = run_realistic_backtest(ml_data, tc_bps, tax_rate)
         
-        # Stats Calc
+        status.update(label="✅ Pipeline Execution Complete!", state="complete", expanded=False)
+        
+        # Calculate Stats (keep your existing code for this part below)
         sh_s, sort_s, tot_s, ann_s, dd_s = calc_stats(res['Net_Ret'])
         sh_b, sort_b, tot_b, ann_b, dd_b = calc_stats(res['Risk_Ret'])
-        
-        # Split stats for stability check
         res_train = res.loc[train_df.index]
         res_test = res.loc[test_df.index]
         is_sh, _, _, _, is_dd = calc_stats(res_train['Net_Ret'])
