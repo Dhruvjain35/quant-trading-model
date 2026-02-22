@@ -1,7 +1,7 @@
 """
-ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v3.1 - CORRECTED
-Fixed: In-sample contamination, tax timing, proper OOS reporting
-Institutional Research Terminal with Real-World Frictions
+ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v4.0 FINAL
+Professional Institutional Research Terminal
+No Data Leakage | Proper Validation | Real-World Costs
 """
 
 import streamlit as st
@@ -10,844 +10,459 @@ import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import scipy.stats as stats
 import statsmodels.api as sm
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.metrics import accuracy_score
-import shap
-import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
 import warnings
-from datetime import timedelta
 import time
 warnings.filterwarnings('ignore')
 
-# ==========================================
-# PAGE CONFIG (Must be first)
-# ==========================================
-st.set_page_config(page_title="AMCE Research Terminal", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="AMCE Terminal", page_icon="▲", layout="wide")
 
-# ==========================================
-# ELITE DARK THEME CSS - IMPROVED
-# ==========================================
+# PROFESSIONAL CSS - NO EMOJIS
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
-:root { 
-    --bg: #0A0E14; 
-    --panel: #11151C; 
-    --accent: #00FFB2; 
-    --text: #EBEEF5; 
-    --purple: #7C4DFF; 
-    --red: #FF3B6B;
-    --blue: #4DA6FF;
-    --gold: #FFB84D;
-}
-.stApp {background-color: var(--bg); color: var(--text); font-family: 'Inter', sans-serif;}
-h1, h2, h3, h4 {font-family: 'Space Grotesk', sans-serif;}
-h1 {
-    color: var(--accent); 
-    font-weight: 700; 
-    font-size: 3.5rem; 
-    letter-spacing: -0.03em;
-    line-height: 1.1;
-    margin-bottom: 0.5rem;
-}
-h2 {
-    color: #8B95A8; 
-    font-size: 0.75rem; 
-    letter-spacing: 0.15em; 
-    border-bottom: 1px solid rgba(255,255,255,0.05); 
-    padding-bottom: 10px; 
-    margin-top: 40px;
-    text-transform: uppercase;
-    font-weight: 600;
-}
-h3 {
-    font-size: 1.2rem;
-    color: var(--text);
-    font-weight: 600;
-    margin-top: 1rem;
-}
-
-/* Sidebar */
-[data-testid="stSidebar"] {
-    background-color: var(--panel); 
-    border-right: 1px solid rgba(255,255,255,0.05);
-}
-[data-testid="stSidebar"] h3 {
-    font-size: 0.9rem;
-    color: var(--accent);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    font-weight: 700;
-}
-
-/* Metrics */
-[data-testid="stMetric"] {
-    background-color: var(--panel); 
-    border: 1px solid rgba(255,255,255,0.05); 
-    border-left: 3px solid var(--purple); 
-    padding: 15px; 
-    border-radius: 4px;
-}
-[data-testid="stMetricValue"] {
-    font-family: 'Space Grotesk', sans-serif; 
-    font-size: 2rem !important; 
-    color: var(--accent) !important;
-    font-weight: 700 !important;
-}
-[data-testid="stMetricLabel"] {
-    font-size: 0.7rem !important;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #8B95A8 !important;
-    font-weight: 600;
-}
-
-/* Hero section */
-.hero-section {
-    background: linear-gradient(135deg, rgba(0, 255, 178, 0.05), rgba(124, 77, 255, 0.05));
-    border: 1px solid rgba(0, 255, 178, 0.1);
-    border-radius: 8px;
-    padding: 3rem 2rem;
-    margin: 2rem 0;
-    text-align: center;
-}
-.hero-title {
-    font-size: 0.85rem;
-    color: #8B95A8;
-    text-transform: uppercase;
-    letter-spacing: 0.2em;
-    margin-bottom: 1rem;
-    font-weight: 600;
-}
-.hero-main {
-    font-size: 3.5rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #00FFB2, #7C4DFF);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin-bottom: 1rem;
-    line-height: 1.1;
-    font-family: 'Space Grotesk', sans-serif;
-}
-.hero-subtitle {
-    font-size: 0.95rem;
-    color: #8B95A8;
-    letter-spacing: 0.05em;
-    margin-bottom: 2rem;
-}
-.feature-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1rem;
-    margin-top: 2rem;
-}
-.feature-card {
-    background: rgba(17, 21, 28, 0.8);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 6px;
-    padding: 1.5rem;
-    text-align: center;
-}
-.feature-icon {
-    font-size: 2rem;
-    margin-bottom: 0.5rem;
-}
-.feature-title {
-    font-size: 0.85rem;
-    color: var(--accent);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 0.5rem;
-}
-.feature-desc {
-    font-size: 0.8rem;
-    color: #8B95A8;
-    line-height: 1.4;
-}
-
-/* Research box */
-.research-box {
-    background-color: var(--panel); 
-    padding: 20px; 
-    border-radius: 4px; 
-    border: 1px solid rgba(124, 77, 255, 0.2); 
-    font-size: 0.85rem;
-}
-
-/* Button */
-.stButton button {
-    background: linear-gradient(90deg, var(--accent), #00D99A); 
-    color: #000; 
-    font-weight: bold; 
-    border: none;
-    padding: 0.75rem 2rem;
-    font-size: 0.9rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-.stButton button:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 255, 178, 0.3);
-}
-
-/* Warning/Info boxes */
-.warning-box {
-    background: rgba(255, 59, 107, 0.1);
-    border-left: 3px solid var(--red);
-    padding: 1rem 1.5rem;
-    border-radius: 4px;
-    margin: 1rem 0;
-}
-.info-box {
-    background: rgba(0, 255, 178, 0.1);
-    border-left: 3px solid var(--accent);
-    padding: 1rem 1.5rem;
-    border-radius: 4px;
-    margin: 1rem 0;
-}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+:root {--bg:#0A0E14;--panel:#11151C;--accent:#00FFB2;--text:#EBEEF5;--gray:#6B7280;--red:#EF4444;--border:rgba(107,114,128,0.2);}
+* {font-family:'Inter',sans-serif;margin:0;padding:0;}
+.stApp {background:var(--bg);color:var(--text);}
+h1 {font-size:2.5rem;font-weight:700;letter-spacing:-0.02em;color:var(--text);line-height:1.2;margin-bottom:0.5rem;}
+h2 {font-size:0.75rem;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:var(--gray);border-bottom:1px solid var(--border);padding-bottom:0.5rem;margin:2rem 0 1rem 0;}
+h3 {font-size:1rem;font-weight:600;color:var(--text);margin:1rem 0 0.5rem 0;}
+[data-testid="stSidebar"] {background:var(--panel);border-right:1px solid var(--border);}
+[data-testid="stMetric"] {background:var(--panel);border:1px solid var(--border);border-left:2px solid var(--accent);padding:1rem;border-radius:2px;}
+[data-testid="stMetricValue"] {font-size:1.75rem !important;color:var(--accent) !important;font-weight:700 !important;font-feature-settings:'tnum';}
+[data-testid="stMetricLabel"] {font-size:0.65rem !important;text-transform:uppercase;letter-spacing:0.05em;color:var(--gray) !important;font-weight:600 !important;}
+.stButton button {background:linear-gradient(135deg,var(--accent),#00D99A);color:#000;font-weight:700;border:none;padding:0.75rem 1.5rem;font-size:0.8rem;letter-spacing:0.05em;text-transform:uppercase;border-radius:2px;}
+.metric-box {background:var(--panel);border:1px solid var(--border);border-left:2px solid var(--accent);padding:0.75rem 1rem;border-radius:2px;margin-bottom:0.5rem;}
+.metric-label {font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--gray);font-weight:600;}
+.metric-value {font-size:1.5rem;color:var(--accent);font-weight:700;margin:0.25rem 0;font-feature-settings:'tnum';}
+.info-panel {background:rgba(0,255,178,0.05);border-left:2px solid var(--accent);padding:1rem;margin:1rem 0;border-radius:2px;font-size:0.85rem;}
+.warning-panel {background:rgba(239,68,68,0.05);border-left:2px solid var(--red);padding:1rem;margin:1rem 0;border-radius:2px;font-size:0.85rem;}
+table {width:100%;border-collapse:collapse;font-size:0.85rem;margin:1rem 0;}
+th {background:var(--panel);color:var(--gray);font-weight:600;text-transform:uppercase;font-size:0.65rem;letter-spacing:0.05em;padding:0.5rem;text-align:left;border-bottom:1px solid var(--border);}
+td {padding:0.5rem;border-bottom:1px solid rgba(107,114,128,0.1);}
 </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# DATA ACQUISITION & FEATURE ENGINEERING
-# ==========================================
-def get_market_data(risk_asset, safe_asset):
-    tickers = [risk_asset, safe_asset, '^VIX', '^TNX']
-    df = yf.download(tickers, start="2006-01-01", end="2026-01-01", progress=False)['Close']
-    df.ffill(inplace=True)
-    df.dropna(inplace=True)
-    
-    if isinstance(df.columns, pd.MultiIndex): 
+@st.cache_data
+def load_data(risk, safe):
+    tickers = [risk, safe, '^VIX']
+    df = yf.download(tickers, start="2006-01-01", progress=False)['Close']
+    df = df.ffill().dropna()
+    if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
-    df = df.rename(columns={risk_asset: 'Risk', safe_asset: 'Safe', '^VIX': 'VIX', '^TNX': 'Yield'})
+    df = df.rename(columns={risk:'Risk', safe:'Safe', '^VIX':'VIX'})
     return df
 
 def engineer_features(df):
     data = df.copy()
-    
-    # Target: Next 5 days return
-    data['Fwd_Ret'] = data['Risk'].shift(-5) / data['Risk'] - 1
-    data['Target'] = (data['Fwd_Ret'] > 0).astype(int)
-    
-    # Momentum
-    data['Mom_1M'] = data['Risk'].pct_change(21)
-    data['Mom_3M'] = data['Risk'].pct_change(63)
-    data['Mom_6M'] = data['Risk'].pct_change(126)
-    data['Safe_Mom'] = data['Safe'].pct_change(63)
-    
-    # Relative Strength
-    data['Rel_Str'] = data['Mom_3M'] - data['Safe'].pct_change(63)
-    
-    # Trend & Reversion
-    data['MA_50'] = data['Risk'] / data['Risk'].rolling(50).mean() - 1
-    data['MA_200'] = data['Risk'] / data['Risk'].rolling(200).mean() - 1
-    data['Dist_Max_6M'] = data['Risk'] / data['Risk'].rolling(126).max() - 1
-    
-    # Macro/Volatility
-    data['VIX_Proxy'] = data['VIX'].rolling(10).mean() / data['VIX'].rolling(60).mean() - 1
-    data['Yield_Chg'] = data['Yield'].diff(21)
-    
-    data.dropna(inplace=True)
-    features = ['Mom_1M', 'Mom_3M', 'Mom_6M', 'Safe_Mom', 'Rel_Str', 'MA_50', 'MA_200', 'Dist_Max_6M', 'VIX_Proxy', 'Yield_Chg']
+    data['Target'] = (data['Risk'].shift(-3) / data['Risk'] - 1 > 0).astype(int)
+    data['Mom_5'] = data['Risk'].pct_change(5)
+    data['Mom_20'] = data['Risk'].pct_change(20)
+    data['Mom_60'] = data['Risk'].pct_change(60)
+    data['Vol_20'] = data['Risk'].pct_change().rolling(20).std() * np.sqrt(252)
+    data['Vol_60'] = data['Risk'].pct_change().rolling(60).std() * np.sqrt(252)
+    data['Vol_Ratio'] = data['Vol_20'] / (data['Vol_60'] + 1e-9)
+    data['DD'] = (data['Risk'] / data['Risk'].rolling(126).max()) - 1
+    data['VIX_MA'] = data['VIX'].rolling(10).mean()
+    data['Safe_Mom'] = data['Safe'].pct_change(20)
+    data = data.dropna()
+    features = ['Mom_5','Mom_20','Mom_60','Vol_20','Vol_Ratio','DD','VIX_MA','Safe_Mom']
     return data, features
 
-# ==========================================
-# ML ENSEMBLE - FIXED TO PREVENT LEAKAGE
-# ==========================================
-def train_ensemble_model(data, features, embargo_months):
-    # Walk-forward split: 70% Train, Embargo Gap, 30% Test
-    split_idx = int(len(data) * 0.70)
-    train_end_idx = split_idx
+def train_model(data, features):
+    # 60/40 split with 6-month gap
+    split = int(len(data) * 0.60)
+    gap = 126  # 6 months
     
-    # ✅ FIX #1: Increase embargo to 2x longest feature lookback
-    embargo_days = max(int((embargo_months / 12) * 252), 252)  # Minimum 1 year
-    test_start_idx = split_idx + embargo_days
+    train = data.iloc[:split]
+    test = data.iloc[split+gap:]
     
-    if test_start_idx >= len(data): 
-        test_start_idx = split_idx + 1
-        
-    train_data = data.iloc[:train_end_idx]
-    test_data = data.iloc[test_start_idx:]
+    X_tr, y_tr = train[features], train['Target']
     
-    X_train, y_train = train_data[features], train_data['Target']
-    X_test, y_test = test_data[features], test_data['Target']
+    # 3 models
+    rf = RandomForestClassifier(n_estimators=100, max_depth=6, min_samples_leaf=15, random_state=42)
+    gb = GradientBoostingClassifier(n_estimators=100, max_depth=4, learning_rate=0.08, random_state=42)
     
-    # Ensemble Models
-    rf = RandomForestClassifier(n_estimators=150, max_depth=5, min_samples_leaf=10, random_state=42)
-    gb = GradientBoostingClassifier(n_estimators=150, max_depth=3, learning_rate=0.05, random_state=42)
+    scaler = StandardScaler()
+    X_tr_sc = scaler.fit_transform(X_tr)
     
-    rf.fit(X_train, y_train)
-    gb.fit(X_train, y_train)
+    rf.fit(X_tr, y_tr)
+    gb.fit(X_tr, y_tr)
     
-    # ✅ FIX #2: Generate predictions ONLY on test set
-    X_test_full = data.loc[test_data.index, features]
-    prob_rf_test = rf.predict_proba(X_test_full)[:, 1]
-    prob_gb_test = gb.predict_proba(X_test_full)[:, 1]
+    # Predict ONLY on test
+    X_te = test[features]
+    X_te_sc = scaler.transform(X_te)
     
-    # Initialize prediction columns with neutral values
-    data['Prob_RF'] = 0.50
-    data['Prob_GB'] = 0.50
-    data['Prob_Avg'] = 0.50
-    data['Disagreement'] = 0.0
-    data['Signal'] = 0  # Stay in benchmark during training period
+    prob_rf = rf.predict_proba(X_te)[:,1]
+    prob_gb = gb.predict_proba(X_te)[:,1]
+    prob_avg = (prob_rf + prob_gb) / 2
     
-    # Only assign predictions for test period
-    data.loc[test_data.index, 'Prob_RF'] = prob_rf_test
-    data.loc[test_data.index, 'Prob_GB'] = prob_gb_test
-    data.loc[test_data.index, 'Prob_Avg'] = (prob_rf_test + prob_gb_test) / 2
-    data.loc[test_data.index, 'Disagreement'] = np.abs(prob_rf_test - prob_gb_test)
-    data.loc[test_data.index, 'Signal'] = (data.loc[test_data.index, 'Prob_Avg'] > 0.50).astype(int)
+    # Initialize full dataset with neutral
+    data['Prob'] = 0.50
+    data['Signal'] = 0
     
-    return data, rf, train_data, test_data
+    # Assign test predictions only
+    data.loc[test.index, 'Prob'] = prob_avg
+    data.loc[test.index, 'Signal'] = (prob_avg > 0.52).astype(int)
+    
+    return data, train, test
 
-# ==========================================
-# REAL-WORLD BACKTEST - FIXED TAX TIMING
-# ==========================================
-def run_realistic_backtest(data, cost_bps, tax_rate_st, slippage_bps):
+def backtest(data, tc_bps, tax_st, slip_bps):
     df = data.copy()
-    df['Risk_Ret'] = df['Risk'].pct_change()
-    df['Safe_Ret'] = df['Safe'].pct_change()
+    df['R_ret'] = df['Risk'].pct_change()
+    df['S_ret'] = df['Safe'].pct_change()
     
     positions = []
-    tax_drags = []
-    
-    in_trade = True
-    entry_price = df['Risk'].iloc[0] if len(df) > 0 else 1.0
-    current_pos = 1
+    taxes = []
+    entry = df['Risk'].iloc[0] if len(df) > 0 else 1.0
+    pos = 1
     
     for i in range(len(df)):
         price = df['Risk'].iloc[i]
-        prob_up = df['Prob_Avg'].iloc[i] 
-        
+        prob = df['Prob'].iloc[i]
         tax = 0.0
         
-        # Long position logic
-        if current_pos == 1:
-            unrealized_gain = (price / entry_price) - 1
-            estimated_tax_penalty = max(0.0, unrealized_gain * tax_rate_st)
+        if pos == 1:
+            gain = (price / entry) - 1
+            tax_cost = max(0, gain * tax_st)
+            threshold = 0.50 - (tax_cost * 1.5)
+            threshold = max(0.30, threshold)
             
-            # Tax-aware threshold
-            dynamic_sell_threshold = 0.50 - (estimated_tax_penalty * 2.0)
-            dynamic_sell_threshold = max(0.25, dynamic_sell_threshold) 
-            
-            if prob_up < dynamic_sell_threshold:
-                current_pos = 0
-                if unrealized_gain > 0:
-                    tax = unrealized_gain * tax_rate_st
-                in_trade = False
-            else:
-                current_pos = 1
-                
-        # Cash position logic
+            if prob < threshold:
+                pos = 0
+                if gain > 0:
+                    tax = gain * tax_st
         else:
-            if prob_up > 0.50:
-                current_pos = 1
-                entry_price = price
-                in_trade = True
-            else:
-                current_pos = 0
-                
-        positions.append(current_pos)
-        tax_drags.append(tax)
+            if prob > 0.52:
+                pos = 1
+                entry = price
         
-    df['Target_Position'] = positions
-    df['Position'] = df['Target_Position'].shift(1).fillna(1)
+        positions.append(pos)
+        taxes.append(tax)
     
-    # ✅ FIX #3: Remove tax shift - tax applies same day as trade
-    df['Tax_Drag'] = pd.Series(tax_drags, index=df.index).fillna(0.0)  # No shift
-    
-    # Gross Return
-    df['Gross_Ret'] = np.where(df['Position'] == 1, df['Risk_Ret'], df['Safe_Ret'])
-    
-    # Transaction Costs + Slippage
-    df['Turnover'] = df['Position'].diff().fillna(0).abs()
-    df['Cost_Drag'] = df['Turnover'] * ((cost_bps + slippage_bps) / 10000)
-    
-    # Net Return
-    df['Net_Ret'] = df['Gross_Ret'] - df['Cost_Drag'] - df['Tax_Drag']
-    
-    # Equity Curves
-    df['Eq_Risk'] = (1 + df['Risk_Ret'].fillna(0)).cumprod()
-    df['Eq_Strat'] = (1 + df['Net_Ret'].fillna(0)).cumprod()
-    
-    # Drawdowns
-    df['DD_Risk'] = df['Eq_Risk'] / df['Eq_Risk'].cummax() - 1
+    df['Pos'] = pd.Series(positions, index=df.index).shift(1).fillna(1)
+    df['Tax'] = pd.Series(taxes, index=df.index).fillna(0)
+    df['Gross'] = np.where(df['Pos']==1, df['R_ret'], df['S_ret'])
+    df['Turn'] = df['Pos'].diff().abs()
+    df['Cost'] = df['Turn'] * (tc_bps + slip_bps) / 10000
+    df['Net'] = df['Gross'] - df['Cost'] - df['Tax']
+    df['Eq_Strat'] = (1 + df['Net'].fillna(0)).cumprod()
+    df['Eq_Risk'] = (1 + df['R_ret'].fillna(0)).cumprod()
     df['DD_Strat'] = df['Eq_Strat'] / df['Eq_Strat'].cummax() - 1
+    df['DD_Risk'] = df['Eq_Risk'] / df['Eq_Risk'].cummax() - 1
     
     return df
 
-# ==========================================
-# QUANTITATIVE METRICS
-# ==========================================
-def calc_stats(returns):
-    ret = returns.dropna()
-    if len(ret) == 0: return 0,0,0,0,0
-    
-    ann_ret = (1 + ret.mean()) ** 252 - 1
-    ann_vol = ret.std() * np.sqrt(252)
-    sharpe = ann_ret / ann_vol if ann_vol > 0 else 0
-    
-    neg_vol = ret[ret < 0].std() * np.sqrt(252)
-    sortino = ann_ret / neg_vol if neg_vol > 0 else 0
-    
-    cum_ret = (1 + ret).cumprod()
-    max_dd = (cum_ret / cum_ret.cummax() - 1).min()
-    tot_ret = cum_ret.iloc[-1] - 1
-    
-    return sharpe, sortino, tot_ret, ann_ret, max_dd
+def calc_stats(rets):
+    ret = rets.dropna()
+    if len(ret) == 0: return 0,0,0,0
+    m, s = ret.mean(), ret.std()
+    sh = (m/s)*np.sqrt(252) if s>0 else 0
+    tot = (1+ret).prod()-1
+    dd = ((1+ret).cumprod()/(1+ret).cumprod().cummax()-1).min()
+    ann = (1+m)**252-1
+    return sh, tot, dd, ann
 
-def calc_rolling_stats(returns, window=252):
-    roll_ann_ret = (1 + returns).rolling(window).mean() * 252
-    roll_vol = returns.rolling(window).std() * np.sqrt(252)
-    roll_sharpe = roll_ann_ret / roll_vol
-    roll_win = (returns > 0).rolling(window).mean()
-    return roll_sharpe, roll_win
-
-# ==========================================
 # SIDEBAR
-# ==========================================
-st.sidebar.markdown("<h3>RESEARCH TERMINAL v3.1</h3>", unsafe_allow_html=True)
-st.sidebar.caption("Fixed: Data leakage, tax timing, proper OOS metrics")
+st.sidebar.markdown("<h3 style='margin-bottom:0.5rem;'>AMCE TERMINAL v4.0</h3>", unsafe_allow_html=True)
+st.sidebar.caption("Professional institutional-grade research")
 st.sidebar.markdown("---")
-
-st.sidebar.markdown("**Model Controls**")
-risk_asset = st.sidebar.text_input("High-Beta Asset", "QQQ")
-safe_asset = st.sidebar.text_input("Risk-Free Asset", "SHY")
-
-# ✅ FIX #4: Increase default embargo to 12 months
-embargo = st.sidebar.slider("Purged Embargo (Months)", 0, 24, 12)
-mc_sims = st.sidebar.number_input("Monte Carlo Sims", min_value=100, max_value=2000, value=500, step=100)
-
+st.sidebar.markdown("**ASSET CONFIGURATION**")
+risk = st.sidebar.text_input("High-Beta Asset", "QQQ")
+safe = st.sidebar.text_input("Risk-Free Asset", "SHY")
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Friction Simulation**")
-tc_bps = st.sidebar.slider("Transaction Cost (bps)", 0, 20, 3)
-slippage_bps = st.sidebar.slider("Slippage (bps)", 0, 50, 5)
-tax_rate = st.sidebar.slider("Short-Term Tax (%)", 0.0, 40.0, 25.0) / 100
-
+st.sidebar.markdown("**COST MODEL**")
+tc = st.sidebar.slider("Transaction Cost (bps)", 0, 20, 5)
+slip = st.sidebar.slider("Slippage (bps)", 0, 20, 5)
+tax = st.sidebar.slider("Short-Term Tax Rate (%)", 0, 40, 28) / 100
 st.sidebar.markdown("---")
-st.sidebar.caption("✅ No data leakage • ✅ OOS metrics only • ✅ Proper tax timing • ✅ Extended embargo")
+st.sidebar.markdown("**VALIDATION**")
+mc = st.sidebar.number_input("Monte Carlo Paths", 100, 1000, 500, 100)
+st.sidebar.markdown("---")
+run = st.sidebar.button("EXECUTE PIPELINE", use_container_width=True)
 
-run_button = st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True)
-
-# ==========================================
-# HERO SECTION (BEFORE EXECUTION)
-# ==========================================
-if not run_button:
+if not run:
     st.markdown("""
-    <div class="hero-section">
-        <div class="hero-title">QUANTITATIVE RESEARCH PLATFORM</div>
-        <div class="hero-main">Adaptive Macro-Conditional<br>Ensemble Model</div>
-        <div class="hero-subtitle">REGIME-FILTERED BOOSTING • WALK-FORWARD VALIDATION • TAX-AWARE EXECUTION</div>
-        
-        <div class="feature-grid">
-            <div class="feature-card">
-                <div class="feature-icon">🎯</div>
-                <div class="feature-title">Crisis Alpha</div>
-                <div class="feature-desc">Preserves capital during systemic risk events</div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">📊</div>
-                <div class="feature-title">Ensemble Voting</div>
-                <div class="feature-desc">Random Forest + Gradient Boosting consensus</div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">🔬</div>
-                <div class="feature-title">Statistical Rigor</div>
-                <div class="feature-desc">Permutation testing • Bootstrap CI • OLS alpha</div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">💰</div>
-                <div class="feature-title">Tax-Aware</div>
-                <div class="feature-desc">Dynamic thresholds to minimize tax drag</div>
+    <div style="padding:3rem 2rem;text-align:center;border:1px solid var(--border);border-radius:4px;margin:2rem 0;">
+        <p style="font-size:0.75rem;color:var(--gray);text-transform:uppercase;letter-spacing:0.15em;margin-bottom:1rem;">QUANTITATIVE RESEARCH TERMINAL</p>
+        <h1 style="margin:0.5rem 0;">Adaptive Macro-Conditional<br>Ensemble Model</h1>
+        <p style="font-size:0.9rem;color:var(--gray);margin-top:1rem;">Regime-filtered ensemble learning with walk-forward validation</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("""
+        <div class="metric-box">
+            <div class="metric-label">METHODOLOGY</div>
+            <div style="font-size:0.85rem;color:var(--text);margin-top:0.5rem;line-height:1.5;">
+            Random Forest + Gradient Boosting ensemble with 60/40 walk-forward split and 6-month purged embargo
             </div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
     
-    st.markdown("""
-    <div class="research-box">
-        <span style="color:#7C4DFF; font-weight:bold;">RESEARCH HYPOTHESIS</span><br><br>
-        <b>H₀ (Null):</b> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.<br><br>
-        <b>H₁ (Alternative):</b> Integrating regime filtering with ensemble learning generates positive crisis alpha and 
-        statistically significant risk-adjusted outperformance, net of taxes and transaction costs.
-        <br><br><span style="color:#8B95A8;">Test Method: Signal permutation (n=1,000) | Significance: p < 0.05 | Factor decomposition via OLS regression</span>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="info-box">
-        <strong>⚡ Ready to Execute</strong><br>
-        Configure your parameters in the sidebar and click <strong>EXECUTE RESEARCH PIPELINE</strong> to begin analysis.
-        All metrics reported are <strong>out-of-sample only</strong> to ensure research integrity.
-    </div>
-    """, unsafe_allow_html=True)
-
-# ==========================================
-# MAIN EXECUTION
-# ==========================================
-if run_button:
-    with st.status("Executing AMCE Research Pipeline...", expanded=True) as status:
-        
-        st.write("1/4: Downloading 20 years of market data...")
-        start_time = time.time()
-        raw_df = get_market_data(risk_asset, safe_asset)
-        st.write(f"✅ Data acquired in {time.time() - start_time:.2f}s ({len(raw_df)} trading days)")
-        
-        st.write("2/4: Engineering momentum & volatility features...")
-        data, feat_cols = engineer_features(raw_df)
-        
-        st.write("3/4: Training ensemble models with purged walk-forward validation...")
-        ml_start = time.time()
-        ml_data, rf_model, train_df, test_df = train_ensemble_model(data, feat_cols, embargo)
-        st.write(f"✅ Models trained in {time.time() - ml_start:.2f}s (Train: {len(train_df)} days, Test: {len(test_df)} days)")
-        
-        st.write("4/4: Running out-of-sample backtest with real-world costs...")
-        res = run_realistic_backtest(ml_data, tc_bps, tax_rate, slippage_bps)
-        
-        status.update(label="✅ Pipeline Complete - All Metrics Out-of-Sample", state="complete", expanded=False)
-        
-        # Calculate stats for FULL period and OOS only
-        res_test = res.loc[test_df.index]
-        
-        # ✅ FIX #5: Use OOS metrics as primary
-        sh_oos, sort_oos, tot_oos, ann_oos, dd_oos = calc_stats(res_test['Net_Ret'])
-        sh_b_oos, sort_b_oos, tot_b_oos, ann_b_oos, dd_b_oos = calc_stats(res_test['Risk_Ret'])
-        
-        # Also calculate full period for comparison (but label clearly as contaminated)
-        sh_full, sort_full, tot_full, ann_full, dd_full = calc_stats(res['Net_Ret'])
-        sh_b_full, _, _, _, _ = calc_stats(res['Risk_Ret'])
-
-    # ==========================================
-    # HEADER SECTION - IMPROVED
-    # ==========================================
-    st.markdown("""
-    <div style="border-bottom: 2px solid rgba(0,255,178,0.1); padding-bottom: 1.5rem; margin-bottom: 2rem;">
-        <p style="font-size: 0.75rem; color: #8B95A8; text-transform: uppercase; letter-spacing: 0.15em; margin: 0;">
-            QUANTITATIVE RESEARCH TERMINAL
-        </p>
-        <h1 style="margin: 0.5rem 0; font-size: 3rem;">Adaptive Macro-Conditional Ensemble</h1>
-        <p style="font-size: 0.85rem; color: #8B95A8; letter-spacing: 0.05em; margin: 0.5rem 0 0 0;">
-            AMCE v3.1 • REGIME FILTERED • ENSEMBLE VOTING • NO DATA LEAKAGE
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="info-box">
-        <strong>✅ Data Integrity Verified</strong><br>
-        All metrics below are <strong>out-of-sample only</strong> (test period: {:.0f} days). 
-        Training period predictions excluded to prevent contamination. 
-        Embargo: {} months ({} days) to prevent autocorrelation leakage.
-    </div>
-    """.format(len(test_df), embargo, max(int((embargo / 12) * 252), 252)), unsafe_allow_html=True)
-
-    # ==========================================
-    # 01 - EXECUTIVE RISK SUMMARY (OOS ONLY)
-    # ==========================================
-    st.markdown("<h2>01 — OUT-OF-SAMPLE PERFORMANCE (TRUE METRICS)</h2>", unsafe_allow_html=True)
-    
-    c1, c2, c3, c4, c5 = st.columns(5)
-    
-    def mbox(label, val, bench, fmt="{:.3f}", is_pct=False):
-        c_color = "var(--accent)" if val > bench else "var(--red)"
-        v_str = f"{val*100:.1f}%" if is_pct else fmt.format(val)
-        b_str = f"{bench*100:.1f}%" if is_pct else fmt.format(bench)
-        arrow = "↑" if val > bench else "↓"
-        return f"""
-        <div data-testid="stMetric">
-            <div style="font-size:0.7rem; color:#8B95A8; letter-spacing:1px; text-transform:uppercase;">{label}</div>
-            <div data-testid="stMetricValue" style="color:{c_color} !important;">{v_str}</div>
-            <div style="font-size:0.75rem; color:{c_color}; margin-top:5px; background:rgba(255,255,255,0.05); padding:2px 8px; border-radius:10px; display:inline-block;">{arrow} vs {b_str}</div>
+    with col2:
+        st.markdown("""
+        <div class="metric-box">
+            <div class="metric-label">VALIDATION</div>
+            <div style="font-size:0.85rem;color:var(--text);margin-top:0.5rem;line-height:1.5;">
+            Out-of-sample testing only. No in-sample contamination. Permutation testing for statistical significance.
+            </div>
         </div>
-        """
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown("""
+        <div class="metric-box">
+            <div class="metric-label">COSTS</div>
+            <div style="font-size:0.85rem;color:var(--text);margin-top:0.5rem;line-height:1.5;">
+            Transaction costs, slippage, and short-term capital gains tax. Tax-aware execution logic.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="info-panel">
+        <strong>Research Hypothesis</strong><br>
+        H₀: Macro-conditional signals provide no improvement over passive exposure<br>
+        H₁: Ensemble learning with regime filtering generates statistically significant alpha net of costs
+    </div>
+    """, unsafe_allow_html=True)
 
-    c1.markdown(mbox("OOS SHARPE", sh_oos, sh_b_oos), unsafe_allow_html=True)
-    c2.markdown(mbox("OOS SORTINO", sort_oos, sort_b_oos), unsafe_allow_html=True)
-    c3.markdown(mbox("OOS RETURN", tot_oos, tot_b_oos, is_pct=True), unsafe_allow_html=True)
-    c4.markdown(mbox("OOS ANN. RET", ann_oos, ann_b_oos, is_pct=True), unsafe_allow_html=True)
-    c5.markdown(mbox("OOS MAX DD", dd_oos, dd_b_oos, is_pct=True), unsafe_allow_html=True)
-
-    # Show comparison with contaminated metrics
+if run:
+    with st.status("Executing research pipeline...", expanded=True) as status:
+        st.write("Loading 20 years of market data...")
+        t0 = time.time()
+        raw = load_data(risk, safe)
+        st.write(f"Data acquired: {len(raw)} trading days ({time.time()-t0:.1f}s)")
+        
+        st.write("Engineering features...")
+        data, feats = engineer_features(raw)
+        
+        st.write("Training ensemble models...")
+        t1 = time.time()
+        ml_data, train_df, test_df = train_model(data, feats)
+        st.write(f"Models trained: {len(train_df)} train, {len(test_df)} test ({time.time()-t1:.1f}s)")
+        
+        st.write("Running backtest with costs...")
+        res = backtest(ml_data, tc, tax, slip)
+        
+        status.update(label="Pipeline complete", state="complete", expanded=False)
+    
+    # Calculate OOS stats
+    res_test = res.loc[test_df.index]
+    sh_s, tot_s, dd_s, ann_s = calc_stats(res_test['Net'])
+    sh_b, tot_b, dd_b, ann_b = calc_stats(res_test['R_ret'])
+    
+    # Header
+    st.markdown("""
+    <div style="border-bottom:1px solid var(--border);padding-bottom:1rem;margin-bottom:2rem;">
+        <p style="font-size:0.7rem;color:var(--gray);text-transform:uppercase;letter-spacing:0.1em;margin:0;">QUANTITATIVE RESEARCH TERMINAL</p>
+        <h1>Adaptive Macro-Conditional Ensemble</h1>
+        <p style="font-size:0.8rem;color:var(--gray);margin:0.5rem 0 0 0;">AMCE v4.0 | Out-of-Sample Validated | No Data Leakage</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
     st.markdown(f"""
-    <div class="warning-box">
-        <strong>⚠️ Comparison: Full Period (Contaminated) vs Out-of-Sample (Clean)</strong><br>
-        <table style="width:100%; margin-top:0.5rem; font-size:0.85rem;">
-            <tr style="color:#8B95A8;">
-                <th style="text-align:left; padding:0.25rem;">Metric</th>
-                <th style="text-align:right; padding:0.25rem;">Full Period</th>
-                <th style="text-align:right; padding:0.25rem;">Out-of-Sample</th>
-                <th style="text-align:right; padding:0.25rem;">Difference</th>
-            </tr>
-            <tr>
-                <td style="padding:0.25rem;">Sharpe Ratio</td>
-                <td style="text-align:right; padding:0.25rem; color:#FF3B6B;">{sh_full:.3f}</td>
-                <td style="text-align:right; padding:0.25rem; color:#00FFB2;">{sh_oos:.3f}</td>
-                <td style="text-align:right; padding:0.25rem;">{(sh_full - sh_oos):.3f} ({((sh_full - sh_oos) / sh_full * 100):.1f}%)</td>
-            </tr>
-        </table>
-        <p style="margin-top:0.5rem; font-size:0.8rem; color:#8B95A8;">
-        The full period Sharpe ({sh_full:.3f}) includes in-sample predictions and is inflated. 
-        The OOS Sharpe ({sh_oos:.3f}) is the true performance metric.
-        </p>
+    <div class="info-panel">
+        <strong>Validation Confirmed</strong> — All metrics computed on out-of-sample test period only ({len(test_df)} days). 
+        Training period: {len(train_df)} days. Purged embargo: 6 months (126 days).
     </div>
     """, unsafe_allow_html=True)
-
-    # ==========================================
-    # 02 - EQUITY CURVE (Show full for visualization but note OOS)
-    # ==========================================
-    st.markdown("<h2>02 — EQUITY CURVE & REGIME OVERLAY</h2>", unsafe_allow_html=True)
-    st.caption("Note: Shaded region is out-of-sample test period. Gray region uses neutral predictions (in-sample).")
     
-    fig1 = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+    # Metrics
+    st.markdown("<h2>OUT-OF-SAMPLE PERFORMANCE</h2>", unsafe_allow_html=True)
     
-    # Mark OOS region
-    test_start = test_df.index[0]
+    c1,c2,c3,c4,c5 = st.columns(5)
     
-    fig1.add_trace(go.Scatter(x=res.index, y=res['Eq_Risk'], name=f"{risk_asset} Buy & Hold", 
-                              line=dict(color='#8B95A8', dash='dash', width=1)), row=1, col=1)
-    fig1.add_trace(go.Scatter(x=res.index, y=res['Eq_Strat'], name="AMCE Strategy", 
-                              line=dict(color='#00FFB2', width=2.5)), row=1, col=1)
+    def make_metric(label, val, bench, pct=False):
+        if pct:
+            v_str = f"{val*100:.1f}%"
+            b_str = f"{bench*100:.1f}%"
+        else:
+            v_str = f"{val:.3f}"
+            b_str = f"{bench:.3f}"
+        
+        color = "var(--accent)" if val > bench else "var(--red)"
+        return f"""<div class="metric-box">
+        <div class="metric-label">{label}</div>
+        <div class="metric-value">{v_str}</div>
+        <div style="font-size:0.7rem;color:{color};margin-top:0.25rem;">vs {b_str}</div>
+        </div>"""
     
-    # Add vertical line at test start
-    fig1.add_vline(x=test_start, line_dash="dash", line_color="#7C4DFF", 
-                   annotation_text="OOS Test Start", annotation_position="top right", row=1, col=1)
+    c1.markdown(make_metric("SHARPE RATIO", sh_s, sh_b), unsafe_allow_html=True)
+    c2.markdown(make_metric("TOTAL RETURN", tot_s, tot_b, True), unsafe_allow_html=True)
+    c3.markdown(make_metric("ANNUAL RETURN", ann_s, ann_b, True), unsafe_allow_html=True)
+    c4.markdown(make_metric("MAX DRAWDOWN", dd_s, dd_b, True), unsafe_allow_html=True)
     
-    fig1.add_trace(go.Scatter(x=res.index, y=res['DD_Risk']*100, showlegend=False, 
-                              line=dict(color='#8B95A8', width=1)), row=2, col=1)
-    fig1.add_trace(go.Scatter(x=res.index, y=res['DD_Strat']*100, showlegend=False, fill='tozeroy', 
-                              fillcolor='rgba(255, 59, 107, 0.3)', line=dict(color='#FF3B6B', width=1)), row=2, col=1)
-
-    fig1.update_layout(height=600, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                       font=dict(color='#EBEEF5'),
-                       yaxis=dict(type="log", title="Portfolio Value (×)"), 
-                       yaxis2=dict(title="Drawdown (%)"), 
-                       hovermode="x unified",
-                       legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(17,21,28,0.8)"))
-    st.plotly_chart(fig1, use_container_width=True)
-
-    # ==========================================
-    # 03 - MONTE CARLO (OOS ONLY)
-    # ==========================================
-    st.markdown("<h2>03 — MONTE CARLO ROBUSTNESS (OUT-OF-SAMPLE)</h2>", unsafe_allow_html=True)
-    st.caption("Bootstrap resampling using ONLY out-of-sample returns. Preserves fat-tail properties.")
+    n_trades = res_test['Turn'].sum()
+    n_years = len(res_test) / 252
+    c5.markdown(f"""<div class="metric-box">
+    <div class="metric-label">TRADES/YEAR</div>
+    <div class="metric-value">{n_trades/n_years:.1f}</div>
+    <div style="font-size:0.7rem;color:var(--gray);margin-top:0.25rem;">Total: {n_trades:.0f}</div>
+    </div>""", unsafe_allow_html=True)
     
-    returns_arr = res_test['Net_Ret'].dropna().values
-    n_days = len(returns_arr)
-    sims = np.random.choice(returns_arr, size=(mc_sims, n_days), replace=True)
+    # Verdict
+    if sh_s > sh_b:
+        st.markdown(f"""<div class="info-panel">
+        <strong>Outperformance Confirmed</strong> — Sharpe {sh_s:.3f} vs benchmark {sh_b:.3f} 
+        ({(sh_s/sh_b-1)*100:.0f}% better). Net of {tax*100:.0f}% tax, {tc+slip}bps friction.
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"""<div class="warning-panel">
+        <strong>Underperformance</strong> — Sharpe {sh_s:.3f} vs benchmark {sh_b:.3f}. 
+        Costs exceeded edge.
+        </div>""", unsafe_allow_html=True)
+    
+    # Equity curve
+    st.markdown("<h2>EQUITY CURVE</h2>", unsafe_allow_html=True)
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=res_test.index, y=res_test['Eq_Risk'], name=f'{risk} Buy & Hold',
+                             line=dict(color='#6B7280', width=1.5, dash='dot')))
+    fig.add_trace(go.Scatter(x=res_test.index, y=res_test['Eq_Strat'], name='AMCE Strategy',
+                             line=dict(color='#00FFB2', width=2.5)))
+    
+    fig.update_layout(
+        height=450, 
+        paper_bgcolor='#0A0E14', 
+        plot_bgcolor='#11151C',
+        font=dict(family='Inter', color='#EBEEF5', size=11),
+        xaxis=dict(showgrid=True, gridcolor='#1F2937'),
+        yaxis=dict(showgrid=True, gridcolor='#1F2937', title='Portfolio Value'),
+        hovermode='x unified',
+        legend=dict(x=0.02, y=0.98, bgcolor='rgba(17,21,28,0.9)')
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Monte Carlo
+    st.markdown("<h2>MONTE CARLO ROBUSTNESS</h2>", unsafe_allow_html=True)
+    
+    rets_arr = res_test['Net'].dropna().values
+    sims = np.random.choice(rets_arr, size=(mc, len(rets_arr)), replace=True)
     sims_cum = np.cumprod(1 + sims, axis=1)
     
-    ci_95 = np.percentile(sims_cum, 95, axis=0)
-    ci_05 = np.percentile(sims_cum, 5, axis=0)
-    med_path = np.median(sims_cum, axis=0)
+    p5 = np.percentile(sims_cum, 5, axis=0)
+    p50 = np.percentile(sims_cum, 50, axis=0)
+    p95 = np.percentile(sims_cum, 95, axis=0)
     
-    prob_beat = np.mean(sims_cum[:, -1] > (1 + tot_b_oos)) * 100
-    prob_dd = np.mean(np.min(sims_cum / np.maximum.accumulate(sims_cum, axis=1) - 1, axis=1) < -0.40) * 100
-    
-    mc_c1, mc_c2, mc_c3 = st.columns(3)
-    mc_c1.markdown(f"<div style='background:var(--panel); padding:10px; border-left:2px solid var(--purple);'><div style='font-size:0.7rem;color:#8B95A8;'>PROB. BEAT BENCHMARK</div><div style='color:var(--accent);font-size:1.5rem;'>{prob_beat:.0f}%</div></div>", unsafe_allow_html=True)
-    mc_c2.markdown(f"<div style='background:var(--panel); padding:10px; border-left:2px solid var(--purple);'><div style='font-size:0.7rem;color:#8B95A8;'>PROB. DRAWDOWN > 40%</div><div style='color:var(--accent);font-size:1.5rem;'>{prob_dd:.0f}%</div></div>", unsafe_allow_html=True)
-    mc_c3.markdown(f"<div style='background:var(--panel); padding:10px; border-left:2px solid var(--purple);'><div style='font-size:0.7rem;color:#8B95A8;'>MEDIAN FINAL VALUE</div><div style='color:var(--accent);font-size:1.5rem;'>×{med_path[-1]:.2f}</div></div>", unsafe_allow_html=True)
-
     fig2 = go.Figure()
-    x_axis = np.arange(n_days)
-    fig2.add_trace(go.Scatter(x=x_axis, y=ci_95, line=dict(width=0), showlegend=False))
-    fig2.add_trace(go.Scatter(x=x_axis, y=ci_05, fill='tonexty', fillcolor='rgba(124, 77, 255, 0.15)', 
-                              line=dict(width=0), name='95% Confidence Cone'))
-    fig2.add_trace(go.Scatter(x=x_axis, y=med_path, line=dict(color='#8B95A8', dash='dash'), name='Median Expectation'))
-    fig2.add_trace(go.Scatter(x=x_axis, y=res_test['Eq_Strat'].values / res_test['Eq_Strat'].values[0], 
-                              line=dict(color='#00FFB2', width=2.5), name='Actual Strategy (OOS)'))
+    x = list(range(len(p5)))
+    fig2.add_trace(go.Scatter(x=x+x[::-1], y=list(p95)+list(p5)[::-1], fill='toself',
+                              fillcolor='rgba(0,255,178,0.1)', line=dict(width=0), name='95% CI'))
+    fig2.add_trace(go.Scatter(x=x, y=p50, line=dict(color='#6B7280', dash='dot'), name='Median'))
+    fig2.add_trace(go.Scatter(x=x, y=res_test['Eq_Strat'].values/res_test['Eq_Strat'].values[0],
+                              line=dict(color='#00FFB2', width=2), name='Actual'))
     
-    fig2.update_layout(height=400, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                       font=dict(color='#EBEEF5'),
-                       yaxis_title="Growth of $1", xaxis_title="Trading Days (OOS Period)", 
-                       legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(17,21,28,0.8)"))
+    fig2.update_layout(
+        height=400,
+        paper_bgcolor='#0A0E14',
+        plot_bgcolor='#11151C',
+        font=dict(family='Inter', color='#EBEEF5', size=11),
+        xaxis=dict(showgrid=True, gridcolor='#1F2937', title='Trading Days'),
+        yaxis=dict(showgrid=True, gridcolor='#1F2937', title='Growth of $1'),
+        legend=dict(x=0.02, y=0.98, bgcolor='rgba(17,21,28,0.9)')
+    )
     st.plotly_chart(fig2, use_container_width=True)
-
-    # Continue with rest of sections (Crisis Alpha, Factor Decomposition, etc.)
-    # Keep the existing code for sections 04-08 as they already use proper data
     
-    # ==========================================
-    # 04 - CRISIS ALPHA
-    # ==========================================
-    st.markdown("<h2>04 — CRISIS ALPHA ANALYSIS</h2>", unsafe_allow_html=True)
-    st.caption("Performance during systemic risk events. Green = capital preserved vs benchmark.")
+    prob_beat = (sims_cum[:,-1] > res_test['Eq_Risk'].values[-1]/res_test['Eq_Risk'].values[0]).mean()
+    prob_dd = (sims_cum.min(axis=1) / np.maximum.accumulate(sims_cum, axis=1).max(axis=1) - 1 < -0.40).mean()
     
-    crises = {
-        "2008 Financial Crisis": ("2008-01-01", "2009-03-01"),
-        "2011 Euro Debt Crisis": ("2011-05-01", "2011-10-01"),
-        "2015 Flash Crash": ("2015-08-01", "2015-09-30"),
-        "2018 Volmageddon": ("2018-09-01", "2018-12-31"),
-        "2020 COVID Crash": ("2020-02-19", "2020-03-23"),
-        "2022 Inflation Bear": ("2022-01-01", "2022-10-15")
-    }
+    mc1, mc2, mc3 = st.columns(3)
+    mc1.markdown(f"""<div class="metric-box">
+    <div class="metric-label">PROB. BEAT BENCHMARK</div>
+    <div class="metric-value">{prob_beat*100:.0f}%</div></div>""", unsafe_allow_html=True)
+    mc2.markdown(f"""<div class="metric-box">
+    <div class="metric-label">PROB. DD > 40%</div>
+    <div class="metric-value">{prob_dd*100:.0f}%</div></div>""", unsafe_allow_html=True)
+    mc3.markdown(f"""<div class="metric-box">
+    <div class="metric-label">MEDIAN FINAL</div>
+    <div class="metric-value">×{p50[-1]:.2f}</div></div>""", unsafe_allow_html=True)
     
-    c_data = []
-    for name, dates in crises.items():
-        try:
-            mask = (res.index >= dates[0]) & (res.index <= dates[1])
-            sub = res.loc[mask]
-            if not sub.empty:
-                s_ret = sub['Eq_Strat'].iloc[-1] / sub['Eq_Strat'].iloc[0] - 1
-                b_ret = sub['Eq_Risk'].iloc[-1] / sub['Eq_Risk'].iloc[0] - 1
-                alpha = s_ret - b_ret
-                res_txt = "✅ Preserved" if alpha > 0 else "❌ Drawdown"
-                c_data.append([name, f"{s_ret*100:.1f}%", f"{b_ret*100:.1f}%", f"{alpha*100:+.1f}%", res_txt])
-        except: 
-            continue
-        
-    if c_data:
-        df_crises = pd.DataFrame(c_data, columns=["CRISIS PERIOD", "STRATEGY", "MARKET", "ALPHA", "RESULT"])
-        html_table = "<table style='width:100%; text-align:left; border-collapse:collapse; font-size:0.85rem;'>"
-        html_table += "<tr style='color:#8B95A8; border-bottom:1px solid rgba(255,255,255,0.1);'><th style='padding:10px;'>CRISIS PERIOD</th><th>STRATEGY</th><th>MARKET</th><th>ALPHA</th><th>RESULT</th></tr>"
-        for _, row in df_crises.iterrows():
-            color = "#00FFB2" if "+" in row['ALPHA'] else "#FF3B6B"
-            html_table += f"<tr style='border-bottom:1px solid rgba(255,255,255,0.05);'><td style='padding:10px; font-family:monospace;'>{row['CRISIS PERIOD']}</td><td>{row['STRATEGY']}</td><td>{row['MARKET']}</td><td style='color:{color}; font-weight:bold;'>{row['ALPHA']}</td><td>{row['RESULT']}</td></tr>"
-        html_table += "</table>"
-        st.markdown(html_table, unsafe_allow_html=True)
-
-    # ==========================================
-    # 05 - FACTOR DECOMPOSITION (OOS)
-    # ==========================================
-    st.markdown("<h2>05 — FACTOR DECOMPOSITION & STABILITY (OUT-OF-SAMPLE)</h2>", unsafe_allow_html=True)
+    # Permutation test
+    st.markdown("<h2>STATISTICAL SIGNIFICANCE</h2>", unsafe_allow_html=True)
     
-    # OLS on OOS data only
-    Y_oos = res_test['Net_Ret'].dropna()
-    X_oos = sm.add_constant(res_test['Risk_Ret'].dropna())
-    model_oos = sm.OLS(Y_oos, X_oos).fit()
-    alpha_ann_oos = model_oos.params['const'] * 252
-    beta_oos = model_oos.params['Risk_Ret']
-    p_val_alpha_oos = model_oos.pvalues['const']
+    n_perm = 500
+    actual_pos = res_test['Pos'].values
+    bench_ret = res_test['R_ret'].values
+    safe_ret = res_test['S_ret'].values
     
-    st.markdown(f"""
-    <div style='display:flex; gap:20px; margin-bottom:20px;'>
-        <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>OOS ALPHA (ANN.)</div><div style='color:var(--accent);font-size:1.8rem;'>{alpha_ann_oos*100:+.2f}%</div><div style='font-size:0.6rem;color:#8B95A8;'>p={p_val_alpha_oos:.3f}</div></div>
-        <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>MARKET BETA</div><div style='color:var(--purple);font-size:1.8rem;'>{beta_oos:.3f}</div><div style='font-size:0.6rem;color:#8B95A8;'>{"Defensive" if beta_oos < 1 else "Aggressive"}</div></div>
-        <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>OOS SHARPE</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_oos:.2f}</div></div>
-        <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>BENCHMARK SHARPE</div><div style='color:#8B95A8;font-size:1.8rem;'>{sh_b_oos:.2f}</div></div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Rolling stats on OOS period
-    roll_sh_s, roll_win_s = calc_rolling_stats(res_test['Net_Ret'])
-    roll_sh_b, _ = calc_rolling_stats(res_test['Risk_Ret'])
-    
-    fig3 = make_subplots(rows=1, cols=2, subplot_titles=("12-Month Rolling Sharpe (OOS)", "12-Month Rolling Win Rate (OOS)"))
-    fig3.add_trace(go.Scatter(x=res_test.index, y=roll_sh_b, line=dict(color='#8B95A8', dash='dot', width=1), 
-                              name='B&H Sharpe'), row=1, col=1)
-    fig3.add_trace(go.Scatter(x=res_test.index, y=roll_sh_s, fill='tozeroy', fillcolor='rgba(0, 255, 178, 0.1)', 
-                              line=dict(color='#00FFB2', width=1.5), name='Strat Sharpe'), row=1, col=1)
-    
-    fig3.add_trace(go.Scatter(x=res_test.index, y=roll_win_s, fill='tozeroy', fillcolor='rgba(0, 255, 178, 0.1)', 
-                              line=dict(color='#00FFB2', width=1.5), name='Strat WinRate'), row=1, col=2)
-    fig3.add_hline(y=0.5, line_dash="dash", line_color="#FF3B6B", row=1, col=2)
-    
-    fig3.update_layout(height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                       font=dict(color='#EBEEF5'), showlegend=False)
-    st.plotly_chart(fig3, use_container_width=True)
-
-    # ==========================================
-    # 06 - PERMUTATION TEST (OOS)
-    # ==========================================
-    st.markdown("<h2>06 — STATISTICAL SIGNIFICANCE (PERMUTATION TEST - OOS)</h2>", unsafe_allow_html=True)
-    st.caption("Shuffling signals 1,000× while keeping returns chronological. Tests genuine predictive skill on OOS data only.")
-    
-    n_perms = 1000
-    actual_signals_oos = res_test['Position'].values
-    bench_returns_oos = res_test['Risk_Ret'].values
-    safe_returns_oos = res_test['Safe_Ret'].values
-    perm_sharpes = []
-    
+    perm_sh = []
     np.random.seed(42)
-    for _ in range(n_perms):
-        shuffled = np.random.permutation(actual_signals_oos)
-        p_ret = np.where(shuffled == 1, bench_returns_oos, safe_returns_oos)
-        p_sh, _, _, _, _ = calc_stats(pd.Series(p_ret))
-        perm_sharpes.append(p_sh)
-        
-    perm_sharpes = np.array(perm_sharpes)
-    p_value = np.sum(perm_sharpes >= sh_oos) / n_perms
-    pct_95 = np.percentile(perm_sharpes, 95)
+    for _ in range(n_perm):
+        shuf = np.random.permutation(actual_pos)
+        p_ret = np.where(shuf==1, bench_ret, safe_ret)
+        m, s = p_ret.mean(), p_ret.std()
+        if s > 0:
+            perm_sh.append((m/s)*np.sqrt(252))
     
-    fig4 = go.Figure()
-    fig4.add_trace(go.Histogram(x=perm_sharpes, nbinsx=50, marker_color='#2C3243', name='Random Signals'))
-    fig4.add_vline(x=sh_oos, line_color='#00FFB2', line_width=3, annotation_text=f'OOS Sharpe ({sh_oos:.2f})')
-    fig4.add_vline(x=pct_95, line_color='#FF3B6B', line_dash='dash', line_width=2, annotation_text=f'95% Threshold ({pct_95:.2f})')
+    perm_sh = np.array(perm_sh)
+    p_val = (perm_sh >= sh_s).mean()
     
-    fig4.update_layout(height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                       font=dict(color='#EBEEF5'),
-                       xaxis_title="Sharpe Ratio", yaxis_title="Frequency", showlegend=True,
-                       legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01))
-    st.plotly_chart(fig4, use_container_width=True)
+    fig3 = go.Figure()
+    fig3.add_trace(go.Histogram(x=perm_sh, nbinsx=40, marker_color='#374151'))
+    fig3.add_vline(x=sh_s, line_color='#00FFB2', line_width=3, annotation_text=f'Actual: {sh_s:.2f}')
+    fig3.add_vline(x=np.percentile(perm_sh, 95), line_color='#EF4444', line_dash='dash')
     
-    if p_value < 0.05:
-        st.markdown(f"<div class='info-box'>⭐ <b>STATISTICALLY SIGNIFICANT</b> — p={p_value:.4f} < 0.05. We reject H₀. Genuine predictive skill confirmed on out-of-sample data.</div>", unsafe_allow_html=True)
+    fig3.update_layout(
+        height=350,
+        paper_bgcolor='#0A0E14',
+        plot_bgcolor='#11151C',
+        font=dict(family='Inter', color='#EBEEF5', size=11),
+        xaxis=dict(showgrid=True, gridcolor='#1F2937', title='Sharpe Ratio'),
+        yaxis=dict(showgrid=True, gridcolor='#1F2937', title='Frequency')
+    )
+    st.plotly_chart(fig3, use_container_width=True)
+    
+    if p_val < 0.05:
+        st.markdown(f"""<div class="info-panel">
+        <strong>Statistically Significant</strong> — p-value {p_val:.4f} < 0.05. Reject null hypothesis. 
+        Genuine predictive skill confirmed.
+        </div>""", unsafe_allow_html=True)
     else:
-        st.markdown(f"<div class='warning-box'>⚠️ <b>NOT STATISTICALLY SIGNIFICANT</b> — p={p_value:.4f} > 0.05. Cannot reject H₀ at 95% confidence.</div>", unsafe_allow_html=True)
-
-    # ==========================================
-    # 07 - ENSEMBLE DISAGREEMENT
-    # ==========================================
-    st.markdown("<h2>07 — ENSEMBLE MODEL DISAGREEMENT (OOS)</h2>", unsafe_allow_html=True)
-    st.caption("Convergence = high conviction. Divergence = regime ambiguity. Gradient Boosting vs Random Forest.")
+        st.markdown(f"""<div class="warning-panel">
+        <strong>Not Significant</strong> — p-value {p_val:.4f} > 0.05. Cannot reject null at 95% confidence.
+        </div>""", unsafe_allow_html=True)
     
-    fig5 = go.Figure()
-    plot_df = res_test.iloc[::5]  # Downsample
-    fig5.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Prob_GB'], line=dict(color='#00FFB2', width=1), name='Gradient Boosting'))
-    fig5.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Prob_RF'], line=dict(color='#7C4DFF', width=1), name='Random Forest'))
-    fig5.add_hline(y=0.5, line_dash="dash", line_color="#FF3B6B", annotation_text="Neutral Threshold")
+    # Factor decomposition
+    st.markdown("<h2>FACTOR DECOMPOSITION</h2>", unsafe_allow_html=True)
     
-    fig5.update_layout(height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                       font=dict(color='#EBEEF5'),
-                       yaxis_title="P(Risky Asset Positive)")
-    st.plotly_chart(fig5, use_container_width=True)
-
-    # ==========================================
-    # 08 - SHAP (if available)
-    # ==========================================
-    if 'test_df' in locals():
-        st.markdown("<h2>08 — SHAP FEATURE ATTRIBUTION (GAME-THEORETIC)</h2>", unsafe_allow_html=True)
-        
-        with st.spinner("Calculating SHAP values..."):
-            X_test_sample = test_df[feat_cols].sample(n=min(500, len(test_df)), random_state=42)
-            
-            explainer = shap.TreeExplainer(rf_model)
-            shap_values = explainer.shap_values(X_test_sample)
-            
-            if isinstance(shap_values, list):
-                shap_values = shap_values[1]
-
-        c_s1, c_s2 = st.columns(2)
-
-        with c_s1:
-            st.markdown("<p style='text-align:center; font-weight:bold;'>Feature Importance (Bar)</p>", unsafe_allow_html=True)
-            plt.figure(figsize=(6, 5)) 
-            shap.summary_plot(shap_values, X_test_sample, plot_type="bar", show=False, color='#7C4DFF')
-            fig1 = plt.gcf() 
-            fig1.patch.set_facecolor('#0A0E14')
-            plt.gca().set_facecolor('#0A0E14')
-            plt.gca().tick_params(colors='#EBEEF5')
-            plt.gca().xaxis.label.set_color('#EBEEF5')
-            st.pyplot(fig1, clear_figure=True)
-
-        with c_s2:
-            st.markdown("<p style='text-align:center; font-weight:bold;'>SHAP Beeswarm</p>", unsafe_allow_html=True)
-            plt.figure(figsize=(6, 5))
-            shap.summary_plot(shap_values, X_test_sample, show=False)
-            fig2 = plt.gcf()
-            fig2.patch.set_facecolor('#0A0E14')
-            plt.gca().set_facecolor('#0A0E14')
-            plt.gca().tick_params(colors='#EBEEF5')
-            plt.gca().xaxis.label.set_color('#EBEEF5')
-            st.pyplot(fig2, clear_figure=True)
+    Y = res_test['Net'].dropna()
+    X_reg = sm.add_constant(res_test['R_ret'].dropna())
+    model = sm.OLS(Y, X_reg).fit()
+    alpha = model.params['const'] * 252
+    beta = model.params['R_ret']
+    p_alpha = model.pvalues['const']
+    
+    fc1, fc2, fc3 = st.columns(3)
+    fc1.markdown(f"""<div class="metric-box">
+    <div class="metric-label">ANNUAL ALPHA</div>
+    <div class="metric-value">{alpha*100:+.2f}%</div>
+    <div style="font-size:0.7rem;color:var(--gray);margin-top:0.25rem;">p={p_alpha:.3f}</div>
+    </div>""", unsafe_allow_html=True)
+    
+    fc2.markdown(f"""<div class="metric-box">
+    <div class="metric-label">MARKET BETA</div>
+    <div class="metric-value">{beta:.3f}</div>
+    <div style="font-size:0.7rem;color:var(--gray);margin-top:0.25rem;">{"Defensive" if beta<1 else "Aggressive"}</div>
+    </div>""", unsafe_allow_html=True)
+    
+    fc3.markdown(f"""<div class="metric-box">
+    <div class="metric-label">R-SQUARED</div>
+    <div class="metric-value">{model.rsquared:.3f}</div>
+    <div style="font-size:0.7rem;color:var(--gray);margin-top:0.25rem;">Model fit</div>
+    </div>""", unsafe_allow_html=True)
+    
+    # Export
+    st.markdown("<h2>EXPORT</h2>", unsafe_allow_html=True)
+    st.download_button("Download Results (CSV)", res_test.to_csv(), f"amce_{risk}_{safe}.csv", "text/csv")
     
     # Footer
-    st.markdown("---")
     st.markdown(f"""
-    <div style="text-align:center; padding:1rem; color:#8B95A8; font-size:0.75rem;">
-        AMCE v3.1 CORRECTED • Out-of-Sample Sharpe: {sh_oos:.3f} • No Data Leakage • Proper Tax Timing<br>
-        Test Period: {len(test_df)} days • Embargo: {embargo} months • Statistical Significance: p={p_value:.4f}
+    <div style="text-align:center;padding:2rem 0;border-top:1px solid var(--border);margin-top:3rem;color:var(--gray);font-size:0.75rem;">
+        AMCE v4.0 | OOS Sharpe: {sh_s:.3f} | Test Period: {len(test_df)} days | p-value: {p_val:.4f}
     </div>
     """, unsafe_allow_html=True)
