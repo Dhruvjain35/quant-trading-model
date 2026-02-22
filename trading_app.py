@@ -1,6 +1,6 @@
 """
-ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v8.2
-THE MASTER BUILD - ALL SECTIONS RESTORED
+ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v8.3
+THE LEHMAN BROTHERS VIX OVERRIDE
 """
 
 import streamlit as st
@@ -14,7 +14,6 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 import shap
 import matplotlib.pyplot as plt
 import warnings
-import time
 warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="AMCE Terminal", page_icon="▲", layout="wide", initial_sidebar_state="expanded")
@@ -100,9 +99,15 @@ def train_ensemble(data, features, embargo):
     test['Raw_Signal'] = np.select(conditions, choices, default=np.nan)
     test['Signal'] = test['Raw_Signal'].ffill().fillna(1)
     
+    # --- V8.3 CIRCUIT BREAKERS ---
+    # 1. Standard Risk Off
     risk_off = (test['MA_200_Dist'] < -0.02) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.05) & (test['RSI_14'] > 35)
+    # 2. Fast Speed Crash
     panic = ((test['MA_200_Dist'] < -0.10) | (test['Mom_1M'] < -0.15)) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.15)
-    test.loc[risk_off | panic, 'Signal'] = 0
+    # 3. LEHMAN BROTHERS FIX: Absolute VIX Fear Gauge (Overrides everything)
+    vix_override = test['VIX'] > 35
+    
+    test.loc[risk_off | panic | vix_override, 'Signal'] = 0
     
     return test, rf, train, test
 
@@ -139,7 +144,7 @@ def stats(rets):
     return sh, sort, tot, ann, dd
 
 # SIDEBAR
-st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V8.2 MASTER</h3></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V8.3 VIX OVERRIDE</h3></div>", unsafe_allow_html=True)
 st.sidebar.markdown("**Model Controls**")
 risk = st.sidebar.text_input("High-Beta Asset", "^NDX")
 safe = st.sidebar.text_input("Risk-Free Asset", "VUSTX") 
@@ -152,7 +157,7 @@ slip = st.sidebar.slider("Slippage (BPS per trade)", 0, 50, 5)
 st.sidebar.markdown("---")
 run = st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True)
 
-# HOMESCREEN (RESTORED)
+# HOMESCREEN
 if not run:
     st.markdown("QUANTITATIVE RESEARCH LAB")
     st.markdown("<h1>Adaptive Macro-Conditional Ensemble</h1>", unsafe_allow_html=True)
@@ -169,7 +174,7 @@ if not run:
     st.stop()
 
 # EXECUTE
-with st.status("Booting AMCE V8.2 Master...", expanded=True) as status:
+with st.status("Booting AMCE V8.3 Master...", expanded=True) as status:
     raw = load_data(risk, safe)
     data, feats = engineer_features(raw)
     test_data, rf_model, train_df, test_df = train_ensemble(data, feats, embargo)
@@ -307,7 +312,7 @@ try:
 except Exception as e:
     st.error(f"Could not render SHAP plots. Exception: {e}")
 
-# FACTOR DECOMP (RESTORED)
+# FACTOR DECOMP
 st.markdown("<h2>06 — FACTOR DECOMPOSITION (OLS ALPHA) & STABILITY</h2>", unsafe_allow_html=True)
 Y = res['Net'].dropna()
 X = sm.add_constant(res['R_ret'].dropna())
@@ -323,7 +328,7 @@ st.markdown(f"""<div style='display:flex;gap:20px;margin-bottom:20px;'>
 <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>SHARPE RATIO</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_s:.3f}</div></div>
 </div>""", unsafe_allow_html=True)
 
-# PERMUTATION TEST (RESTORED)
+# PERMUTATION TEST
 st.markdown("<h2>07 — STATISTICAL SIGNIFICANCE (PERMUTATION TEST)</h2>", unsafe_allow_html=True)
 n_perm = 1000
 pos = res['Pos'].values
