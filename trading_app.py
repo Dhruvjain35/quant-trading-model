@@ -1,6 +1,6 @@
 """
-ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v6.0
-THE ALPHA MODEL - ASYMMETRIC THRESHOLDS & LONG DURATION SAFETY
+ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v7.0
+THE CIRCUIT BREAKER MODEL - MAXIMUM DRAWDOWN CONTROL
 """
 
 import streamlit as st
@@ -59,7 +59,7 @@ def engineer_features(df):
     data['MA_200_Dist'] = data['Risk'] / data['Risk'].rolling(200).mean() - 1
     data['Yield_Mom'] = data['Yield'].pct_change(21)
     
-    # RSI (Mean Reversion - helps AI buy the dip)
+    # RSI (Mean Reversion)
     delta = data['Risk'].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = -1 * delta.clip(upper=0).rolling(14).mean()
@@ -103,16 +103,21 @@ def train_ensemble(data, features, embargo):
     test['Prob_Avg'] = (prob_rf + prob_gb) / 2
     test['Prob_Smooth'] = test['Prob_Avg'].ewm(span=10).mean()
     
-    # ASYMMETRIC BULL BIAS: Default to LONG. High conviction required to sell.
+    # ASYMMETRIC BULL BIAS
     conditions = [test['Prob_Smooth'] > 0.48, test['Prob_Smooth'] < 0.43]
     choices = [1, 0]
     test['Raw_Signal'] = np.select(conditions, choices, default=np.nan)
     test['Signal'] = test['Raw_Signal'].ffill().fillna(1)
     
-    # SMART MACRO OVERRIDE
-    # Only sell if broken trend AND vol expanding AND NOT heavily oversold (RSI > 35)
-    crash_condition = (test['MA_200_Dist'] < -0.02) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.05) & (test['RSI_14'] > 35)
-    test.loc[crash_condition, 'Signal'] = 0
+    # --- V7.0 THE CIRCUIT BREAKER ---
+    # 1. Normal risk-off (Respects RSI to buy dips)
+    risk_off = (test['MA_200_Dist'] < -0.02) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.05) & (test['RSI_14'] > 35)
+    
+    # 2. PANIC CIRCUIT BREAKER (Ignores RSI. Just survive the crash.)
+    panic = (test['MA_200_Dist'] < -0.10) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.15)
+    
+    test.loc[risk_off | panic, 'Signal'] = 0
+    # --------------------------------
     
     return test, rf, train, test
 
@@ -147,10 +152,9 @@ def stats(rets):
     return sh, sort, tot, ann, dd
 
 # SIDEBAR
-st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V6.0 ALPHA</h3></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V7.0 BREAKER</h3></div>", unsafe_allow_html=True)
 st.sidebar.markdown("**Model Controls**")
 risk = st.sidebar.text_input("High-Beta Asset", "^NDX")
-# SWAPPED TO LONG-DURATION TREASURIES FOR POSITIVE CRISIS ALPHA
 safe = st.sidebar.text_input("Risk-Free Asset", "VUSTX") 
 embargo = st.sidebar.slider("Purged Embargo (Months)", 0, 12, 4)
 mc = st.sidebar.number_input("Monte Carlo Sims", 100, 2000, 500, 100)
@@ -159,7 +163,7 @@ st.sidebar.markdown("**Friction Simulation**")
 tc = st.sidebar.slider("Transaction Cost (bps)", 0, 20, 3)
 slip = st.sidebar.slider("Slippage (BPS per trade)", 0, 50, 5)
 st.sidebar.markdown("---")
-st.sidebar.caption("Regime-Filtered Boosting • Purged walk-forward validation • Ensemble voting")
+st.sidebar.caption("Regime-Filtered Boosting • Circuit Breaker Logic • Ensemble voting")
 run = st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True)
 
 if not run:
@@ -178,7 +182,7 @@ if not run:
     st.stop()
 
 # EXECUTE
-with st.status("Booting AMCE Alpha Model...", expanded=True) as status:
+with st.status("Booting AMCE Circuit Breaker Model...", expanded=True) as status:
     st.write("1/4: Loading historical data...")
     t0 = time.time()
     raw = load_data(risk, safe)
@@ -382,44 +386,3 @@ fig4.update_layout(height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba
                    font=dict(color='#EBEEF5'), xaxis_title="Sharpe Ratio", yaxis_title="Frequency",
                    showlegend=False)
 st.plotly_chart(fig4, use_container_width=True)
-
-if p_val < 0.05:
-    st.markdown(f"<div style='background:rgba(0,255,178,0.1);padding:15px;border-left:3px solid var(--accent);'><strong>⭐ STATISTICALLY SIGNIFICANT</strong> — p={p_val:.4f} < 0.05. Genuine predictive skill confirmed.</div>", unsafe_allow_html=True)
-
-# SHAP
-if len(test_df) > 100:
-    st.markdown("<h2>10 — SHAP FEATURE ATTRIBUTION (GAME-THEORETIC)</h2>", unsafe_allow_html=True)
-    
-    with st.spinner("Calculating SHAP..."):
-        X_samp = test_df[feats].sample(n=min(500, len(test_df)), random_state=42)
-        exp = shap.TreeExplainer(rf_model)
-        shap_vals = exp.shap_values(X_samp)
-        if isinstance(shap_vals, list):
-            shap_vals = shap_vals[1]
-    
-    c1, c2 = st.columns(2)
-    
-    with c1:
-        st.markdown("<p style='text-align:center;font-weight:bold;'>Feature Importance</p>", unsafe_allow_html=True)
-        plt.figure(figsize=(6,5))
-        shap.summary_plot(shap_vals, X_samp, plot_type="bar", show=False, color='#7C4DFF')
-        f = plt.gcf()
-        f.patch.set_facecolor('#0A0E14')
-        plt.gca().set_facecolor('#0A0E14')
-        plt.gca().tick_params(colors='#EBEEF5')
-        plt.gca().xaxis.label.set_color('#EBEEF5')
-        st.pyplot(f, clear_figure=True)
-    
-    with c2:
-        st.markdown("<p style='text-align:center;font-weight:bold;'>SHAP Beeswarm</p>", unsafe_allow_html=True)
-        plt.figure(figsize=(6,5))
-        shap.summary_plot(shap_vals, X_samp, show=False)
-        f = plt.gcf()
-        f.patch.set_facecolor('#0A0E14')
-        plt.gca().set_facecolor('#0A0E14')
-        plt.gca().tick_params(colors='#EBEEF5')
-        plt.gca().xaxis.label.set_color('#EBEEF5')
-        st.pyplot(f, clear_figure=True)
-
-st.markdown("---")
-st.markdown("<p style='text-align:center;color:#8B95A8;font-size:0.75rem;'>AMCE v6.0 | ALPHA OOS VALIDATION | ASYMMETRIC LONG BIAS | NOT FINANCIAL ADVICE</p>", unsafe_allow_html=True)
