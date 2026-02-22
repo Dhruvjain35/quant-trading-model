@@ -135,7 +135,7 @@ def train_ensemble_model(data, features, embargo_months):
 # ==========================================
 # 3. REAL-WORLD BACKTEST ENGINE (TAX-AWARE)
 # ==========================================
-def run_realistic_backtest(data, cost_bps, tax_rate_st):
+def run_realistic_backtest(data, cost_bps, tax_rate_st, slippage_bps):
     df = data.copy()
     df['Risk_Ret'] = df['Risk'].pct_change()
     df['Safe_Ret'] = df['Safe'].pct_change()
@@ -203,9 +203,10 @@ def run_realistic_backtest(data, cost_bps, tax_rate_st):
     # Gross Return
     df['Gross_Ret'] = np.where(df['Position'] == 1, df['Risk_Ret'], df['Safe_Ret'])
     
-    # Transaction Costs
+    # Transaction Costs AND Slippage
     df['Turnover'] = df['Position'].diff().fillna(0).abs()
-    df['Cost_Drag'] = df['Turnover'] * (cost_bps / 10000)
+    # ⬇️ THIS IS THE LINE THAT CHANGED TO INCLUDE SLIPPAGE ⬇️
+    df['Cost_Drag'] = df['Turnover'] * ((cost_bps + slippage_bps) / 10000)
     
     # Net Return
     df['Net_Ret'] = df['Gross_Ret'] - df['Cost_Drag'] - df['Tax_Drag']
@@ -264,6 +265,7 @@ mc_sims = st.sidebar.number_input("Monte Carlo Sims", min_value=100, max_value=2
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Friction Simulation**")
 tc_bps = st.sidebar.slider("Transaction Cost (bps)", 0, 20, 3)
+slippage_bps = st.sidebar.slider("Slippage (BPS per trade)", 0, 50, 5)
 tax_rate = st.sidebar.slider("Short-Term Tax (%)", 0.0, 40.0, 25.0) / 100
 
 st.sidebar.markdown("---")
@@ -272,20 +274,20 @@ st.sidebar.caption("Regime-Filtered Boosting • Purged walk-forward validation 
 if st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True):
     with st.status("Booting AMCE Quantitative Engine...", expanded=True) as status:
         
-        st.write("📡 1/4: Pinging Yahoo Finance API for 20-year daily data...")
+        st.write("1/4: Pinging Yahoo Finance API for 20-year daily data...")
         start_time = time.time()
         raw_df = get_market_data(risk_asset, safe_asset)
         st.write(f"✅ Data secured in {time.time() - start_time:.2f} seconds. ({len(raw_df)} trading days)")
         
-        st.write("⚙️ 2/4: Engineering Momentum & Volatility Features...")
+        st.write("2/4: Engineering Momentum & Volatility Features...")
         data, feat_cols = engineer_features(raw_df)
         
-        st.write("🧠 3/4: Training Sklearn Random Forest & Gradient Boosting...")
+        st.write("3/4: Training Sklearn Random Forest & Gradient Boosting...")
         ml_start = time.time()
         ml_data, rf_model, train_df, test_df = train_ensemble_model(data, feat_cols, embargo)
         st.write(f"✅ Ensemble weights optimized in {time.time() - ml_start:.2f} seconds.")
         
-        st.write("💸 4/4: Running Walk-Forward Backtest (Applying Taxes & Frictions)...")
+        st.write("4/4: Running Walk-Forward Backtest (Applying Taxes & Frictions)...")
         res = run_realistic_backtest(ml_data, tc_bps, tax_rate)
         
         status.update(label="✅ Pipeline Execution Complete!", state="complete", expanded=False)
