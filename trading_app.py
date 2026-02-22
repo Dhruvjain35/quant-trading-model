@@ -1,6 +1,6 @@
 """
-ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v8.4
-INSTITUTIONAL BUILD - VOLATILITY SCALING
+ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v8.5
+ASYMMETRIC VOL-SCALING & OLS FIX
 """
 
 import streamlit as st
@@ -99,7 +99,7 @@ def train_ensemble(data, features, embargo):
     test['Raw_Signal'] = np.select(conditions, choices, default=np.nan)
     test['Signal'] = test['Raw_Signal'].ffill().fillna(1)
     
-    # Standard AI Circuit Breaker (From v8.2)
+    # Standard AI Circuit Breaker
     risk_off = (test['MA_200_Dist'] < -0.02) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.05) & (test['RSI_14'] > 35)
     panic = ((test['MA_200_Dist'] < -0.10) | (test['Mom_1M'] < -0.15)) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.15)
     test.loc[risk_off | panic, 'Signal'] = 0
@@ -112,39 +112,39 @@ def backtest(data, cost_bps, slip_bps, target_vol_pct):
     df['S_ret'] = df['Safe'].pct_change().fillna(0)
     df['Cash_ret'] = (df['Yield'] / 100) / 252 
     
-    # 1. Calculate Realized Market Volatility (21-day rolling annualized)
+    # Volatility Calculations
     df['Realized_Vol'] = df['R_ret'].rolling(21).std() * np.sqrt(252)
-    df['Realized_Vol'] = df['Realized_Vol'].replace(0, 0.001) # Avoid division by zero
-    
-    # 2. Calculate Volatility Scalar (Target Vol / Realized Vol)
+    df['Realized_Vol'] = df['Realized_Vol'].replace(0, 0.001) 
     target_vol_dec = target_vol_pct / 100.0
     df['Vol_Scalar'] = target_vol_dec / df['Realized_Vol']
-    df['Vol_Scalar'] = df['Vol_Scalar'].clip(upper=1.0) # Cap at 100% exposure (No leverage)
+    df['Vol_Scalar'] = df['Vol_Scalar'].clip(upper=1.0) 
     
-    # 3. Apply Scalar to AI Signal
+    # V8.5 ASYMMETRIC REGIME SCALING
+    df['Bull_Regime'] = (df['MA_200_Dist'] > 0).astype(int)
+    df['Bull_Regime_Shift'] = df['Bull_Regime'].shift(1).fillna(1)
+    
+    # If in Bull Regime, use 100% exposure. If in Bear Regime, apply the Vol Brake.
+    df['Active_Weight'] = np.where(df['Bull_Regime_Shift'] == 1, 1.0, df['Vol_Scalar'].shift(1).fillna(1.0))
+    
     df['Signal_Shift'] = df['Signal'].shift(1).fillna(1)
-    df['W_Risk'] = df['Signal_Shift'] * df['Vol_Scalar'].shift(1).fillna(1)
+    df['W_Risk'] = df['Signal_Shift'] * df['Active_Weight']
     df['W_Safe'] = 1.0 - df['W_Risk']
     
-    # 4. Determine Safe Haven Asset
+    # Apply Returns
     df['Yield_Trend_Shift'] = df['Yield_Trend'].shift(1).fillna(False)
     df['Defensive_Ret'] = np.where(df['Yield_Trend_Shift'], df['Cash_ret'], df['S_ret'])
-    
-    # 5. Calculate Gross Returns based on Dynamic Weights
     df['Gross'] = (df['W_Risk'] * df['R_ret']) + (df['W_Safe'] * df['Defensive_Ret'])
     
-    # 6. Calculate Friction (Turnover based on weight changes)
-    df['Turn'] = df['W_Risk'].diff().abs() * 2 # Approximates 2-way turnover
+    # Friction
+    df['Turn'] = df['W_Risk'].diff().abs() * 2 
     df['Cost'] = df['Turn'] * (cost_bps + slip_bps) / 10000
     df['Net'] = df['Gross'] - df['Cost']
     
-    # 7. Metrics
     df['Eq_Strat'] = (1 + df['Net'].fillna(0)).cumprod()
     df['Eq_Risk'] = (1 + df['R_ret'].fillna(0)).cumprod()
     df['DD_Strat'] = df['Eq_Strat'] / df['Eq_Strat'].cummax() - 1
     df['DD_Risk'] = df['Eq_Risk'] / df['Eq_Risk'].cummax() - 1
     
-    # Save base binary signal for permutation testing
     df['Pos'] = df['Signal_Shift']
     
     return df
@@ -162,12 +162,12 @@ def stats(rets):
     return sh, sort, tot, ann, dd
 
 # SIDEBAR
-st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V8.4 VOL-SCALING</h3></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V8.5 ASYMMETRIC</h3></div>", unsafe_allow_html=True)
 st.sidebar.markdown("**Model Controls**")
 risk = st.sidebar.text_input("High-Beta Asset", "^NDX")
 safe = st.sidebar.text_input("Risk-Free Asset", "VUSTX") 
 embargo = st.sidebar.slider("Purged Embargo (Months)", 0, 12, 4)
-target_vol = st.sidebar.slider("Target Annualized Vol (%)", 10, 40, 18, help="Low Vol = Smoother ride, lower returns. High Vol = Aggressive.")
+target_vol = st.sidebar.slider("Bear Market Vol Brake (%)", 10, 40, 15, help="Only activates when below 200-day MA to preserve capital.")
 mc = st.sidebar.number_input("Monte Carlo Sims", 100, 2000, 500, 100)
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Friction Simulation**")
@@ -180,20 +180,20 @@ run = st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=Tru
 if not run:
     st.markdown("QUANTITATIVE RESEARCH LAB")
     st.markdown("<h1>Adaptive Macro-Conditional Ensemble</h1>", unsafe_allow_html=True)
-    st.caption("AMCE FRAMEWORK • VOLATILITY SCALED • ENSEMBLE VOTING • STATISTICAL VALIDATION")
+    st.caption("AMCE FRAMEWORK • ASYMMETRIC SCALING • ENSEMBLE VOTING • STATISTICAL VALIDATION")
     
     st.markdown("""
     <div style="background:rgba(124,77,255,0.1);padding:20px;border-radius:4px;border:1px solid rgba(124,77,255,0.2);margin-top:20px;">
         <span style="color:#7C4DFF;font-weight:bold;">RESEARCH HYPOTHESIS</span><br><br>
         <b>H₀ (Null):</b> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.<br>
-        <b>H₁ (Alternative):</b> Integrating Volatility Scaling with Gradient Boosting signals generates positive crisis alpha and statistically significant risk-adjusted outperformance, net of taxes and fees.
+        <b>H₁ (Alternative):</b> Integrating Asymmetric Vol-Scaling with Gradient Boosting signals generates positive crisis alpha and statistically significant risk-adjusted outperformance, net of taxes and fees.
         <br><br><span style="color:#8B95A8;">Test: Signal permutation (n=1,000) | Threshold: p < 0.05 | Alpha via OLS on excess returns</span>
     </div>
     """, unsafe_allow_html=True)
     st.stop()
 
 # EXECUTE
-with st.status("Booting AMCE V8.4 Vol-Scaled...", expanded=True) as status:
+with st.status("Booting AMCE V8.5 Asymmetric...", expanded=True) as status:
     raw = load_data(risk, safe)
     data, feats = engineer_features(raw)
     test_data, rf_model, train_df, test_df = train_ensemble(data, feats, embargo)
@@ -331,26 +331,30 @@ try:
 except Exception as e:
     st.error(f"Could not render SHAP plots. Exception: {e}")
 
-# FACTOR DECOMP
+# V8.5 OLS FIX
 st.markdown("<h2>06 — FACTOR DECOMPOSITION (OLS ALPHA) & STABILITY</h2>", unsafe_allow_html=True)
-Y = res['Net'].dropna()
-X = sm.add_constant(res['R_ret'].dropna())
-model = sm.OLS(Y, X).fit()
-alpha = model.params['const'] * 252
-beta = model.params['R_ret']
-p_alpha = model.pvalues['const']
+try:
+    ols_df = res[['Net', 'R_ret']].dropna()
+    Y_ols = ols_df['Net']
+    X_ols = sm.add_constant(ols_df['R_ret'])
+    model = sm.OLS(Y_ols, X_ols).fit()
+    alpha = model.params['const'] * 252
+    beta = model.params['R_ret']
+    p_alpha = model.pvalues['const']
 
-st.markdown(f"""<div style='display:flex;gap:20px;margin-bottom:20px;'>
-<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>ALPHA (ANN.)</div><div style='color:var(--accent);font-size:1.8rem;'>{alpha*100:+.2f}%</div><div style='font-size:0.6rem;color:#8B95A8;'>p={p_alpha:.3f}</div></div>
-<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>MARKET BETA</div><div style='color:var(--purple);font-size:1.8rem;'>{beta:.3f}</div></div>
-<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>R-SQUARED</div><div style='color:#EBEEF5;font-size:1.8rem;'>{model.rsquared:.3f}</div></div>
-<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>SHARPE RATIO</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_s:.3f}</div></div>
-</div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div style='display:flex;gap:20px;margin-bottom:20px;'>
+    <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>ALPHA (ANN.)</div><div style='color:var(--accent);font-size:1.8rem;'>{alpha*100:+.2f}%</div><div style='font-size:0.6rem;color:#8B95A8;'>p={p_alpha:.3f}</div></div>
+    <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>MARKET BETA</div><div style='color:var(--purple);font-size:1.8rem;'>{beta:.3f}</div></div>
+    <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>R-SQUARED</div><div style='color:#EBEEF5;font-size:1.8rem;'>{model.rsquared:.3f}</div></div>
+    <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>SHARPE RATIO</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_s:.3f}</div></div>
+    </div>""", unsafe_allow_html=True)
+except Exception as e:
+    st.error(f"OLS calculation failed: {e}")
 
 # PERMUTATION TEST
 st.markdown("<h2>07 — STATISTICAL SIGNIFICANCE (PERMUTATION TEST)</h2>", unsafe_allow_html=True)
 n_perm = 1000
-pos = res['Pos'].values # Uses AI base signal
+pos = res['Pos'].values
 br = res['R_ret'].values
 sr = res['S_ret'].values
 
