@@ -132,13 +132,73 @@ def train_ensemble_model(data, features, embargo_months):
 # ==========================================
 # 3. REAL-WORLD BACKTEST ENGINE (TAX & SLIPPAGE)
 # ==========================================
+# ==========================================
+# 3. REAL-WORLD BACKTEST ENGINE (TAX-AWARE)
+# ==========================================
 def run_realistic_backtest(data, cost_bps, tax_rate_st):
     df = data.copy()
     df['Risk_Ret'] = df['Risk'].pct_change()
     df['Safe_Ret'] = df['Safe'].pct_change()
     
-    # Position logic
-    df['Position'] = df['Signal'].shift(1).fillna(1) # Default to Long initially
+    # We will iterate row by row to apply the Tax-Aware holding logic
+    positions = []
+    tax_drags = []
+    
+    in_trade = True
+    entry_price = df['Risk'].iloc[0] if len(df) > 0 else 1.0
+    current_pos = 1
+    
+    for i in range(len(df)):
+        price = df['Risk'].iloc[i]
+        # Prob_Avg is the AI's probability that the market goes UP
+        prob_up = df['Prob_Avg'].iloc[i] 
+        
+        tax = 0.0
+        
+        # IF WE ARE CURRENTLY LONG THE RISK ASSET (QQQ)
+        if current_pos == 1:
+            # Calculate what our tax bill WOULD be if we sold today
+            unrealized_gain = (price / entry_price) - 1
+            estimated_tax_penalty = max(0.0, unrealized_gain * tax_rate_st)
+            
+            # TAX-AWARE LOGIC: 
+            # Normally, we sell if prob_up < 0.50. 
+            # Now, we lower that threshold based on the tax penalty.
+            # Every 1% in tax penalty lowers the sell threshold by 2% (conviction multiplier)
+            dynamic_sell_threshold = 0.50 - (estimated_tax_penalty * 2.0)
+            
+            # Cap the threshold at 0.25 so we don't blindly hold through a guaranteed apocalypse
+            dynamic_sell_threshold = max(0.25, dynamic_sell_threshold) 
+            
+            if prob_up < dynamic_sell_threshold:
+                # The AI is terrified enough to justify paying the tax. SELL!
+                current_pos = 0
+                if unrealized_gain > 0:
+                    tax = unrealized_gain * tax_rate_st # Apply the tax hit
+                in_trade = False
+            else:
+                # Model might want to sell, but not confident enough to beat the tax bill. HODL.
+                current_pos = 1
+                
+        # IF WE ARE CURRENTLY IN CASH/SAFE ASSET (SHY)
+        else:
+            # No tax penalty to buy back in. Just use the standard 0.50 threshold.
+            if prob_up > 0.50:
+                current_pos = 1
+                entry_price = price # Reset our tax basis to today's price
+                in_trade = True
+            else:
+                current_pos = 0
+                
+        positions.append(current_pos)
+        tax_drags.append(tax)
+        
+    df['Target_Position'] = positions
+    # Shift position by 1 because we trade at the close based on today's signal
+    df['Position'] = df['Target_Position'].shift(1).fillna(1)
+    
+    # Shift the tax drag so it aligns with the day the trade actually executes
+    df['Tax_Drag'] = pd.Series(tax_drags, index=df.index).shift(1).fillna(0.0)
     
     # Gross Return
     df['Gross_Ret'] = np.where(df['Position'] == 1, df['Risk_Ret'], df['Safe_Ret'])
@@ -146,36 +206,6 @@ def run_realistic_backtest(data, cost_bps, tax_rate_st):
     # Transaction Costs
     df['Turnover'] = df['Position'].diff().fillna(0).abs()
     df['Cost_Drag'] = df['Turnover'] * (cost_bps / 10000)
-    
-    # Short-Term Capital Gains Tax Logic
-    # Simplified: If we switch from Risk (1) to Safe (0), and the preceding trade was profitable, we tax the gain.
-    df['Tax_Drag'] = 0.0
-    
-    # Track basis roughly
-    in_trade = False
-    entry_price = 0.0
-    
-    tax_drags = []
-    for i in range(len(df)):
-        pos = df['Position'].iloc[i]
-        price = df['Risk'].iloc[i]
-        prev_pos = df['Position'].iloc[i-1] if i > 0 else 1
-        
-        tax = 0.0
-        if pos == 1 and prev_pos == 0:
-            entry_price = price # Enter trade
-            in_trade = True
-        elif pos == 0 and prev_pos == 1 and in_trade:
-            # Exit trade
-            gain_pct = (price / entry_price) - 1
-            if gain_pct > 0:
-                # Apply tax to the gain percentage on the day of exit
-                tax = gain_pct * tax_rate_st
-            in_trade = False
-            
-        tax_drags.append(tax)
-        
-    df['Tax_Drag'] = tax_drags
     
     # Net Return
     df['Net_Ret'] = df['Gross_Ret'] - df['Cost_Drag'] - df['Tax_Drag']
