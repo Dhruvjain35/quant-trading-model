@@ -299,7 +299,7 @@ if st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True):
         st.write(f"✅ Ensemble weights optimized in {time.time() - ml_start:.2f} seconds.")
         
         st.write("4/4: Running Walk-Forward Backtest (Applying Taxes & Frictions)...")
-        res = run_realistic_backtest(ml_data, tc_bps, tax_rate)
+        res = run_realistic_backtest(ml_data, tc_bps, tax_rate, slippage_bps)
         
         status.update(label="✅ Pipeline Execution Complete!", state="complete", expanded=False)
         
