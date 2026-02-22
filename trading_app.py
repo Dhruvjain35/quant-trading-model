@@ -524,54 +524,55 @@ if st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True):
     fig5.update_layout(height=300, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#EBEEF5'),
                        yaxis_title="P(Risky Asset Positive)")
     st.plotly_chart(fig5, use_container_width=True)
-
-    # ==========================================
-    # 08 - SHAP FEATURE ATTRIBUTION
-    # ==========================================
-    # ==========================================
+# ==========================================
 # 08 - SHAP FEATURE ATTRIBUTION
 # ==========================================
 st.markdown("<h2>08 — SHAP FEATURE ATTRIBUTION (GAME-THEORETIC)</h2>", unsafe_allow_html=True)
 
-with st.spinner("Calculating SHAP values..."):
-    # SHAP takes heavy compute, so we sample 500 rows max
-    X_test_sample = test_df[feat_cols].sample(n=min(500, len(test_df)), random_state=42)
-    
-    explainer = shap.TreeExplainer(rf_model)
-    shap_values = explainer.shap_values(X_test_sample)
-    
-    # Sklearn Random Forest returns a list of arrays. We want the 'Up' class (index 1).
-    if isinstance(shap_values, list):
-        shap_values = shap_values[1]
+try:
+    with st.spinner("Calculating SHAP values..."):
+        # SHAP takes heavy compute, so we sample 500 rows max
+        X_test_sample = test_df[feat_cols].sample(n=min(500, len(test_df)), random_state=42)
+        
+        explainer = shap.TreeExplainer(rf_model)
+        shap_values = explainer.shap_values(X_test_sample)
+        
+        # Sklearn Random Forest returns a list of arrays. We want the 'Up' class (index 1).
+        if isinstance(shap_values, list):
+            shap_values = shap_values[1]
 
-c_s1, c_s2 = st.columns(2)
+    c_s1, c_s2 = st.columns(2)
 
-with c_s1:
-    st.markdown("<p style='text-align:center; font-weight:bold;'>Feature Importance (Bar)</p>", unsafe_allow_html=True)
-    plt.figure(figsize=(6, 5)) # Create fresh global figure
-    
-    # SHAP draws on the global figure
-    shap.summary_plot(shap_values, X_test_sample, plot_type="bar", show=False, color='#7C4DFF')
-    fig1 = plt.gcf() # Grab the global figure
-    
-    # Dark mode styling
-    fig1.patch.set_facecolor('#0A0E14')
-    plt.gca().set_facecolor('#0A0E14')
-    plt.gca().tick_params(colors='#EBEEF5')
-    plt.gca().xaxis.label.set_color('#EBEEF5')
-    
-    st.pyplot(fig1, clear_figure=True)
+    with c_s1:
+        st.markdown("<p style='text-align:center; font-weight:bold;'>Feature Importance (Bar)</p>", unsafe_allow_html=True)
+        plt.figure(figsize=(6, 5)) # Create fresh global figure
+        
+        # SHAP draws on the global figure
+        shap.summary_plot(shap_values, X_test_sample, plot_type="bar", show=False, color='#7C4DFF')
+        fig1 = plt.gcf() # Grab the global figure
+        
+        # Dark mode styling
+        fig1.patch.set_facecolor('#0A0E14')
+        plt.gca().set_facecolor('#0A0E14')
+        plt.gca().tick_params(colors='#EBEEF5')
+        plt.gca().xaxis.label.set_color('#EBEEF5')
+        
+        st.pyplot(fig1, clear_figure=True)
 
-with c_s2:
-    st.markdown("<p style='text-align:center; font-weight:bold;'>SHAP Beeswarm</p>", unsafe_allow_html=True)
-    plt.figure(figsize=(6, 5))
-    
-    shap.summary_plot(shap_values, X_test_sample, show=False)
-    fig2 = plt.gcf()
-    
-    fig2.patch.set_facecolor('#0A0E14')
-    plt.gca().set_facecolor('#0A0E14')
-    plt.gca().tick_params(colors='#EBEEF5')
-    plt.gca().xaxis.label.set_color('#EBEEF5')
-    
-    st.pyplot(fig2, clear_figure=True)
+    with c_s2:
+        st.markdown("<p style='text-align:center; font-weight:bold;'>SHAP Beeswarm</p>", unsafe_allow_html=True)
+        plt.figure(figsize=(6, 5))
+        
+        shap.summary_plot(shap_values, X_test_sample, show=False)
+        fig2 = plt.gcf()
+        
+        fig2.patch.set_facecolor('#0A0E14')
+        plt.gca().set_facecolor('#0A0E14')
+        plt.gca().tick_params(colors='#EBEEF5')
+        plt.gca().xaxis.label.set_color('#EBEEF5')
+        
+        st.pyplot(fig2, clear_figure=True)
+
+except NameError:
+    # If test_df doesn't exist yet, gracefully show this message instead of crashing
+    st.warning("The AI hasn't been trained yet! Please click '⚡ EXECUTE RESEARCH PIPELINE' in the sidebar to generate the SHAP analysis.")
