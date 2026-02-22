@@ -1,6 +1,6 @@
 """
-ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v3.0
-THE LEGENDARY MODEL - STRICT OOS WITH MACRO OVERRIDE
+ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v4.0
+THE DEEP-HISTORY MODEL - TRAINED ON THE 90s, TESTED ON THE 2000s
 """
 
 import streamlit as st
@@ -38,7 +38,8 @@ h2 {color:#8B95A8;font-size:0.8rem;letter-spacing:0.15em;border-bottom:1px solid
 @st.cache_data
 def load_data(risk, safe):
     tickers = [risk, safe, '^VIX', '^TNX']
-    df = yf.download(tickers, start="2006-01-01", end="2026-01-01", progress=False)['Close']
+    # PULLING DATA FROM 1993 TO CATCH THE DOT-COM BUBBLE
+    df = yf.download(tickers, start="1993-01-01", end="2026-01-01", progress=False)['Close']
     df.ffill(inplace=True)
     df.dropna(inplace=True)
     if isinstance(df.columns, pd.MultiIndex):
@@ -53,7 +54,7 @@ def engineer_features(df):
     data['Fwd_Ret'] = data['Risk'].shift(-1) / data['Risk'] - 1
     data['Target'] = (data['Fwd_Ret'] > 0).astype(int)
     
-    # STRIPPED DOWN MACRO FEATURES (Removing noise)
+    # STRIPPED DOWN MACRO FEATURES
     data['Mom_3M'] = data['Risk'].pct_change(63)
     data['MA_200_Dist'] = data['Risk'] / data['Risk'].rolling(200).mean() - 1
     data['Yield_Mom'] = data['Yield'].pct_change(21)
@@ -65,12 +66,12 @@ def engineer_features(df):
     data['Vol_Ratio_MA'] = data['Vol_Ratio'].rolling(63).mean()
     
     data.dropna(inplace=True)
-    # Kept to the absolute most predictive macro pillars
     features = ['Mom_3M', 'MA_200_Dist', 'Yield_Mom', 'Vol_Ratio']
     return data, features
 
 def train_ensemble(data, features, embargo):
-    split = int(len(data) * 0.70)
+    # TRAIN ON 40% (Gets us through roughly 2006). OOS TESTING ON EVERYTHING AFTER.
+    split = int(len(data) * 0.40)
     embargo_days = int((embargo / 12) * 252)
     test_start = split + embargo_days
     
@@ -83,7 +84,7 @@ def train_ensemble(data, features, embargo):
     X_tr, y_tr = train[features], train['Target']
     X_te = test[features]
     
-    # EXTREME REGULARIZATION: max_depth=2. Forcing the AI to find broad regimes, not overfit.
+    # EXTREME REGULARIZATION
     rf = RandomForestClassifier(n_estimators=100, max_depth=2, min_samples_leaf=20, random_state=42)
     gb = GradientBoostingClassifier(n_estimators=100, max_depth=2, learning_rate=0.01, random_state=42)
     
@@ -105,7 +106,6 @@ def train_ensemble(data, features, embargo):
     test['Signal'] = test['Raw_Signal'].ffill().fillna(1)
     
     # THE MACRO OVERRIDE (Trend Following Veto)
-    # If the asset is below its 200-day MA AND volatility is expanding, kill the long signal.
     crash_condition = (test['MA_200_Dist'] < 0) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'])
     test.loc[crash_condition, 'Signal'] = 0
     
@@ -142,10 +142,11 @@ def stats(rets):
     return sh, sort, tot, ann, dd
 
 # SIDEBAR
-st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V3.0</h3></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V4.0</h3></div>", unsafe_allow_html=True)
 st.sidebar.markdown("**Model Controls**")
-risk = st.sidebar.text_input("High-Beta Asset", "QQQ")
-safe = st.sidebar.text_input("Risk-Free Asset", "SHY")
+# DEEP HISTORY PROXIES
+risk = st.sidebar.text_input("High-Beta Asset", "^NDX")
+safe = st.sidebar.text_input("Risk-Free Asset", "VFISX")
 embargo = st.sidebar.slider("Purged Embargo (Months)", 0, 12, 4)
 mc = st.sidebar.number_input("Monte Carlo Sims", 100, 2000, 500, 100)
 st.sidebar.markdown("---")
@@ -173,8 +174,8 @@ if not run:
     st.stop()
 
 # EXECUTE
-with st.status("Booting AMCE...", expanded=True) as status:
-    st.write("1/4: Loading data...")
+with st.status("Booting AMCE Deep-History...", expanded=True) as status:
+    st.write("1/4: Loading historical data...")
     t0 = time.time()
     raw = load_data(risk, safe)
     st.write(f"✅ Data: {len(raw)} days ({time.time()-t0:.1f}s)")
@@ -182,7 +183,7 @@ with st.status("Booting AMCE...", expanded=True) as status:
     st.write("2/4: Engineering features...")
     data, feats = engineer_features(raw)
     
-    st.write("3/4: Training ensemble...")
+    st.write("3/4: Training ensemble (40/60 Split)...")
     t1 = time.time()
     test_data, rf_model, train_df, test_df = train_ensemble(data, feats, embargo)
     st.write(f"✅ Models: {len(train_df)} train, {len(test_df)} test ({time.time()-t1:.1f}s)")
@@ -287,6 +288,7 @@ st.plotly_chart(fig2, use_container_width=True)
 st.markdown("<h2>04 — CRISIS ALPHA ANALYSIS</h2>", unsafe_allow_html=True)
 
 crises = {
+    "2000 Dot-Com Crash (In-Sample)": ("2000-03-10", "2002-10-09"),
     "2008 Financial Crisis": ("2008-01-01", "2009-03-01"),
     "2011 Euro Debt Crisis": ("2011-05-01", "2011-10-01"),
     "2015 Flash Crash": ("2015-08-01", "2015-09-30"),
@@ -296,23 +298,31 @@ crises = {
 }
 
 c_data = []
+# Check both full raw data (for in-sample crises) and res data (for OOS crises)
 for name, dates in crises.items():
     try:
-        mask = (res.index >= dates[0]) & (res.index <= dates[1])
-        sub = res.loc[mask]
-        if not sub.empty:
-            s_ret = sub['Eq_Strat'].iloc[-1] / sub['Eq_Strat'].iloc[0] - 1
-            b_ret = sub['Eq_Risk'].iloc[-1] / sub['Eq_Risk'].iloc[0] - 1
-            alpha = s_ret - b_ret
-            res_txt = "✅ Preserved" if alpha > 0 else "❌ Drawdown"
-            c_data.append([name, f"{s_ret*100:.1f}%", f"{b_ret*100:.1f}%", f"{alpha*100:+.1f}%", res_txt])
+        if "In-Sample" in name:
+            mask = (data.index >= dates[0]) & (data.index <= dates[1])
+            sub = data.loc[mask]
+            if not sub.empty:
+                b_ret = sub['Risk'].iloc[-1] / sub['Risk'].iloc[0] - 1
+                c_data.append([name, "N/A (Train Data)", f"{b_ret*100:.1f}%", "N/A", "Trained"])
+        else:
+            mask = (res.index >= dates[0]) & (res.index <= dates[1])
+            sub = res.loc[mask]
+            if not sub.empty:
+                s_ret = sub['Eq_Strat'].iloc[-1] / sub['Eq_Strat'].iloc[0] - 1
+                b_ret = sub['Eq_Risk'].iloc[-1] / sub['Eq_Risk'].iloc[0] - 1
+                alpha = s_ret - b_ret
+                res_txt = "✅ Preserved" if alpha > 0 else "❌ Drawdown"
+                c_data.append([name, f"{s_ret*100:.1f}%", f"{b_ret*100:.1f}%", f"{alpha*100:+.1f}%", res_txt])
     except: pass
 
 if c_data:
     html = "<table style='width:100%;border-collapse:collapse;font-size:0.85rem;'>"
     html += "<tr style='color:#8B95A8;border-bottom:1px solid rgba(255,255,255,0.1);'><th style='padding:10px;'>CRISIS PERIOD</th><th>STRATEGY</th><th>MARKET</th><th>ALPHA (EDGE)</th><th>RESULT</th></tr>"
     for row in c_data:
-        col = "#00FFB2" if "+" in row[3] else "#FF3B6B"
+        col = "#00FFB2" if "+" in row[3] else ("#FF3B6B" if "-" in row[3] else "#8B95A8")
         html += f"<tr style='border-bottom:1px solid rgba(255,255,255,0.05);'><td style='padding:10px;font-family:monospace;'>{row[0]}</td><td>{row[1]}</td><td>{row[2]}</td><td style='color:{col};font-weight:bold;'>{row[3]}</td><td>{row[4]}</td></tr>"
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
@@ -409,4 +419,4 @@ if len(test_df) > 100:
         st.pyplot(f, clear_figure=True)
 
 st.markdown("---")
-st.markdown("<p style='text-align:center;color:#8B95A8;font-size:0.75rem;'>AMCE v3.0 | STRICT OOS VALIDATION | NOT FINANCIAL ADVICE</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;color:#8B95A8;font-size:0.75rem;'>AMCE v4.0 | STRICT OOS VALIDATION | DEEP HISTORY | NOT FINANCIAL ADVICE</p>", unsafe_allow_html=True)
