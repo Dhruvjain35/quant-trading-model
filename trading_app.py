@@ -1,6 +1,6 @@
 """
-ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v7.0
-THE CIRCUIT BREAKER MODEL - MAXIMUM DRAWDOWN CONTROL
+ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v8.0
+DYNAMIC SAFE HAVEN & FAST BREAKERS
 """
 
 import streamlit as st
@@ -49,24 +49,25 @@ def load_data(risk, safe):
 def engineer_features(df):
     data = df.copy()
     
-    # Target: 1-day forward return 
+    # Target
     data['Fwd_Ret'] = data['Risk'].shift(-1) / data['Risk'] - 1
     data['Target'] = (data['Fwd_Ret'] > 0).astype(int)
     
-    # KINETIC MACRO FEATURES
+    # Kinematics
     data['Mom_1M'] = data['Risk'].pct_change(21)
     data['Mom_3M'] = data['Risk'].pct_change(63)
     data['MA_200_Dist'] = data['Risk'] / data['Risk'].rolling(200).mean() - 1
     data['Yield_Mom'] = data['Yield'].pct_change(21)
+    data['Yield_Trend'] = data['Yield'] > data['Yield'].rolling(63).mean() # For Dynamic Safe Haven
     
-    # RSI (Mean Reversion)
+    # RSI
     delta = data['Risk'].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = -1 * delta.clip(upper=0).rolling(14).mean()
     rs = gain / loss
     data['RSI_14'] = 100 - (100 / (1 + rs))
     
-    # Volatility Regimes
+    # Volatility
     data['Risk_Vol'] = data['Risk'].pct_change().rolling(21).std()
     data['Safe_Vol'] = data['Safe'].pct_change().rolling(21).std()
     data['Vol_Ratio'] = data['Risk_Vol'] / data['Safe_Vol']
@@ -90,7 +91,6 @@ def train_ensemble(data, features, embargo):
     X_tr, y_tr = train[features], train['Target']
     X_te = test[features]
     
-    # Model configuration
     rf = RandomForestClassifier(n_estimators=100, max_depth=3, min_samples_leaf=15, random_state=42)
     gb = GradientBoostingClassifier(n_estimators=100, max_depth=3, learning_rate=0.01, random_state=42)
     
@@ -103,21 +103,18 @@ def train_ensemble(data, features, embargo):
     test['Prob_Avg'] = (prob_rf + prob_gb) / 2
     test['Prob_Smooth'] = test['Prob_Avg'].ewm(span=10).mean()
     
-    # ASYMMETRIC BULL BIAS
     conditions = [test['Prob_Smooth'] > 0.48, test['Prob_Smooth'] < 0.43]
     choices = [1, 0]
     test['Raw_Signal'] = np.select(conditions, choices, default=np.nan)
     test['Signal'] = test['Raw_Signal'].ffill().fillna(1)
     
-    # --- V7.0 THE CIRCUIT BREAKER ---
-    # 1. Normal risk-off (Respects RSI to buy dips)
+    # --- V8.0 THE FAST CIRCUIT BREAKER ---
     risk_off = (test['MA_200_Dist'] < -0.02) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.05) & (test['RSI_14'] > 35)
     
-    # 2. PANIC CIRCUIT BREAKER (Ignores RSI. Just survive the crash.)
-    panic = (test['MA_200_Dist'] < -0.10) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.15)
+    # Added Mom_1M < -0.15 for lightning fast crashes like COVID
+    panic = ((test['MA_200_Dist'] < -0.10) | (test['Mom_1M'] < -0.15)) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.15)
     
     test.loc[risk_off | panic, 'Signal'] = 0
-    # --------------------------------
     
     return test, rf, train, test
 
@@ -125,9 +122,20 @@ def backtest(data, cost_bps, slip_bps):
     df = data.copy()
     df['R_ret'] = df['Risk'].pct_change()
     df['S_ret'] = df['Safe'].pct_change()
-    df['Pos'] = df['Signal'].shift(1).fillna(1)
     
-    df['Gross'] = np.where(df['Pos']==1, df['R_ret'], df['S_ret'])
+    # Daily cash yield (approximation)
+    df['Cash_ret'] = (df['Yield'] / 100) / 252 
+    
+    df['Pos'] = df['Signal'].shift(1).fillna(1)
+    df['Yield_Trend_Shift'] = df['Yield_Trend'].shift(1).fillna(False)
+    
+    # --- V8.0 DYNAMIC SAFE HAVEN ROUTING ---
+    # If invested: R_ret
+    # If safe & rates rising: Cash_ret
+    # If safe & rates falling: S_ret (Long Bonds)
+    df['Gross'] = np.where(df['Pos']==1, df['R_ret'], 
+                  np.where(df['Yield_Trend_Shift'], df['Cash_ret'], df['S_ret']))
+                  
     df['Turn'] = df['Pos'].diff().abs()
     
     df['Cost'] = df['Turn'] * (cost_bps + slip_bps) / 10000
@@ -152,7 +160,7 @@ def stats(rets):
     return sh, sort, tot, ann, dd
 
 # SIDEBAR
-st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V7.0 BREAKER</h3></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V8.0 DYNAMIC</h3></div>", unsafe_allow_html=True)
 st.sidebar.markdown("**Model Controls**")
 risk = st.sidebar.text_input("High-Beta Asset", "^NDX")
 safe = st.sidebar.text_input("Risk-Free Asset", "VUSTX") 
@@ -163,42 +171,20 @@ st.sidebar.markdown("**Friction Simulation**")
 tc = st.sidebar.slider("Transaction Cost (bps)", 0, 20, 3)
 slip = st.sidebar.slider("Slippage (BPS per trade)", 0, 50, 5)
 st.sidebar.markdown("---")
-st.sidebar.caption("Regime-Filtered Boosting • Circuit Breaker Logic • Ensemble voting")
+st.sidebar.caption("Regime-Filtered • Dynamic Havens • Ensemble voting")
 run = st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True)
 
 if not run:
     st.markdown("QUANTITATIVE RESEARCH LAB")
     st.markdown("<h1>Adaptive Macro-Conditional Ensemble</h1>", unsafe_allow_html=True)
-    st.caption("AMCE FRAMEWORK • REGIME FILTERED • ENSEMBLE VOTING • STATISTICAL VALIDATION")
-    
-    st.markdown("""
-    <div style="background:rgba(124,77,255,0.1);padding:20px;border-radius:4px;border:1px solid rgba(124,77,255,0.2);margin-top:20px;">
-        <span style="color:#7C4DFF;font-weight:bold;">RESEARCH HYPOTHESIS</span><br><br>
-        <b>H₀ (Null):</b> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.<br>
-        <b>H₁ (Alternative):</b> Integrating Regime Filtering (Trend) with Gradient Boosting signals generates positive crisis alpha and statistically significant risk-adjusted outperformance, net of taxes and fees.
-        <br><br><span style="color:#8B95A8;">Test: Signal permutation (n=1,000) | Threshold: p < 0.05 | Alpha via OLS on excess returns</span>
-    </div>
-    """, unsafe_allow_html=True)
     st.stop()
 
 # EXECUTE
-with st.status("Booting AMCE Circuit Breaker Model...", expanded=True) as status:
-    st.write("1/4: Loading historical data...")
-    t0 = time.time()
+with st.status("Booting AMCE Dynamic Safe Haven Model...", expanded=True) as status:
     raw = load_data(risk, safe)
-    st.write(f"✅ Data: {len(raw)} days ({time.time()-t0:.1f}s)")
-    
-    st.write("2/4: Engineering features...")
     data, feats = engineer_features(raw)
-    
-    st.write("3/4: Training ensemble (40/60 Split)...")
-    t1 = time.time()
     test_data, rf_model, train_df, test_df = train_ensemble(data, feats, embargo)
-    st.write(f"✅ Models: {len(train_df)} train, {len(test_df)} test ({time.time()-t1:.1f}s)")
-    
-    st.write("4/4: Running backtest (STRICT OUT OF SAMPLE)...")
     res = backtest(test_data, tc, slip)
-    
     status.update(label="✅ Complete!", state="complete", expanded=False)
 
 # STATS
@@ -208,16 +194,6 @@ sh_b, sort_b, tot_b, ann_b, dd_b = stats(res['R_ret'])
 # HEADER
 st.markdown("QUANTITATIVE RESEARCH LAB")
 st.markdown("<h1>Adaptive Macro-Conditional Ensemble</h1>", unsafe_allow_html=True)
-st.caption("AMCE FRAMEWORK • REGIME FILTERED • ENSEMBLE VOTING • STRICT OUT-OF-SAMPLE VALIDATION")
-
-st.markdown("""
-<div style="background:rgba(124,77,255,0.1);padding:20px;border-radius:4px;border:1px solid rgba(124,77,255,0.2);margin-top:10px;">
-    <span style="color:#7C4DFF;font-weight:bold;">RESEARCH HYPOTHESIS</span><br><br>
-    <b>H₀ (Null):</b> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.<br>
-    <b>H₁ (Alternative):</b> Integrating Regime Filtering (Trend) with Gradient Boosting signals generates positive crisis alpha and statistically significant risk-adjusted outperformance, net of taxes and fees.
-    <br><br><span style="color:#8B95A8;">Test: Signal permutation (n=1,000) | Threshold: p < 0.05 | Alpha via OLS on excess returns</span>
-</div>
-""", unsafe_allow_html=True)
 
 # METRICS
 st.markdown("<h2>01 — EXECUTIVE RISK SUMMARY (OOS DATA ONLY)</h2>", unsafe_allow_html=True)
@@ -262,7 +238,6 @@ st.plotly_chart(fig1, use_container_width=True)
 
 # MONTE CARLO
 st.markdown("<h2>03 — MONTE CARLO ROBUSTNESS (BOOTSTRAPPED)</h2>", unsafe_allow_html=True)
-
 rets = res['Net'].dropna().values
 sims = np.random.choice(rets, size=(mc, len(rets)), replace=True)
 sims_cum = np.cumprod(1 + sims, axis=1)
@@ -279,24 +254,9 @@ mc1.markdown(f"<div style='background:var(--panel);padding:10px;border-left:2px 
 mc2.markdown(f"<div style='background:var(--panel);padding:10px;border-left:2px solid var(--purple);'><div style='font-size:0.7rem;color:#8B95A8;'>PROB. DRAWDOWN > 40%</div><div style='color:var(--accent);font-size:1.5rem;'>{prob_dd:.0f}%</div></div>", unsafe_allow_html=True)
 mc3.markdown(f"<div style='background:var(--panel);padding:10px;border-left:2px solid var(--purple);'><div style='font-size:0.7rem;color:#8B95A8;'>MEDIAN FINAL VALUE</div><div style='color:var(--accent);font-size:1.5rem;'>x{p50[-1]:.2f}</div></div>", unsafe_allow_html=True)
 
-fig2 = go.Figure()
-x = np.arange(len(p5))
-fig2.add_trace(go.Scatter(x=x, y=p95, line=dict(width=0), showlegend=False))
-fig2.add_trace(go.Scatter(x=x, y=p5, fill='tonexty', fillcolor='rgba(124,77,255,0.15)',
-                          line=dict(width=0), name='95% Confidence Cone'))
-fig2.add_trace(go.Scatter(x=x, y=p50, line=dict(color='#8B95A8', dash='dash'), name='Median'))
-fig2.add_trace(go.Scatter(x=x, y=res['Eq_Strat'].values, line=dict(color='#00FFB2', width=2.5), name='Actual'))
-
-fig2.update_layout(height=400, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                   font=dict(color='#EBEEF5'), yaxis_title="Growth of $1", xaxis_title="Trading Days",
-                   legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(17,21,28,0.8)"))
-st.plotly_chart(fig2, use_container_width=True)
-
 # CRISIS ALPHA
 st.markdown("<h2>04 — CRISIS ALPHA ANALYSIS</h2>", unsafe_allow_html=True)
-
 crises = {
-    "2000 Dot-Com Crash (In-Sample)": ("2000-03-10", "2002-10-09"),
     "2008 Financial Crisis": ("2008-01-01", "2009-03-01"),
     "2011 Euro Debt Crisis": ("2011-05-01", "2011-10-01"),
     "2015 Flash Crash": ("2015-08-01", "2015-09-30"),
@@ -308,21 +268,14 @@ crises = {
 c_data = []
 for name, dates in crises.items():
     try:
-        if "In-Sample" in name:
-            mask = (data.index >= dates[0]) & (data.index <= dates[1])
-            sub = data.loc[mask]
-            if not sub.empty:
-                b_ret = sub['Risk'].iloc[-1] / sub['Risk'].iloc[0] - 1
-                c_data.append([name, "N/A (Train Data)", f"{b_ret*100:.1f}%", "N/A", "Trained"])
-        else:
-            mask = (res.index >= dates[0]) & (res.index <= dates[1])
-            sub = res.loc[mask]
-            if not sub.empty:
-                s_ret = sub['Eq_Strat'].iloc[-1] / sub['Eq_Strat'].iloc[0] - 1
-                b_ret = sub['Eq_Risk'].iloc[-1] / sub['Eq_Risk'].iloc[0] - 1
-                alpha = s_ret - b_ret
-                res_txt = "✅ Preserved" if alpha > 0 else "❌ Drawdown"
-                c_data.append([name, f"{s_ret*100:.1f}%", f"{b_ret*100:.1f}%", f"{alpha*100:+.1f}%", res_txt])
+        mask = (res.index >= dates[0]) & (res.index <= dates[1])
+        sub = res.loc[mask]
+        if not sub.empty:
+            s_ret = sub['Eq_Strat'].iloc[-1] / sub['Eq_Strat'].iloc[0] - 1
+            b_ret = sub['Eq_Risk'].iloc[-1] / sub['Eq_Risk'].iloc[0] - 1
+            alpha = s_ret - b_ret
+            res_txt = "✅ Preserved" if alpha > 0 else "❌ Drawdown"
+            c_data.append([name, f"{s_ret*100:.1f}%", f"{b_ret*100:.1f}%", f"{alpha*100:+.1f}%", res_txt])
     except: pass
 
 if c_data:
@@ -333,56 +286,40 @@ if c_data:
         html += f"<tr style='border-bottom:1px solid rgba(255,255,255,0.05);'><td style='padding:10px;font-family:monospace;'>{row[0]}</td><td>{row[1]}</td><td>{row[2]}</td><td style='color:{col};font-weight:bold;'>{row[3]}</td><td>{row[4]}</td></tr>"
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
-else:
-    st.info("No major crisis dates fall within the current test period.")
 
-# FACTOR DECOMP
-st.markdown("<h2>05 — FACTOR DECOMPOSITION (OLS ALPHA) & STABILITY</h2>", unsafe_allow_html=True)
+# SHAP (Fixed Render Logic)
+st.markdown("<h2>05 — SHAP FEATURE ATTRIBUTION (GAME-THEORETIC)</h2>", unsafe_allow_html=True)
+try:
+    with st.spinner("Calculating SHAP..."):
+        X_samp = test_df[feats].sample(n=min(500, len(test_df)), random_state=42)
+        exp = shap.TreeExplainer(rf_model)
+        shap_vals = exp.shap_values(X_samp)
+        if isinstance(shap_vals, list):
+            shap_vals = shap_vals[1]
+    
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        st.markdown("<p style='text-align:center;font-weight:bold;'>Feature Importance</p>", unsafe_allow_html=True)
+        fig_bar = plt.figure(figsize=(6,5))
+        shap.summary_plot(shap_vals, X_samp, plot_type="bar", show=False, color='#7C4DFF')
+        fig_bar.patch.set_facecolor('#0A0E14')
+        plt.gca().set_facecolor('#0A0E14')
+        plt.gca().tick_params(colors='#EBEEF5')
+        plt.gca().xaxis.label.set_color('#EBEEF5')
+        st.pyplot(fig_bar, clear_figure=True)
+    
+    with c2:
+        st.markdown("<p style='text-align:center;font-weight:bold;'>SHAP Beeswarm</p>", unsafe_allow_html=True)
+        fig_bee = plt.figure(figsize=(6,5))
+        shap.summary_plot(shap_vals, X_samp, show=False)
+        fig_bee.patch.set_facecolor('#0A0E14')
+        plt.gca().set_facecolor('#0A0E14')
+        plt.gca().tick_params(colors='#EBEEF5')
+        plt.gca().xaxis.label.set_color('#EBEEF5')
+        st.pyplot(fig_bee, clear_figure=True)
+except Exception as e:
+    st.error(f"Could not render SHAP plots. Matplotlib memory error: {e}")
 
-Y = res['Net'].dropna()
-X = sm.add_constant(res['R_ret'].dropna())
-model = sm.OLS(Y, X).fit()
-alpha = model.params['const'] * 252
-beta = model.params['R_ret']
-p_alpha = model.pvalues['const']
-
-st.markdown(f"""<div style='display:flex;gap:20px;margin-bottom:20px;'>
-<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>ALPHA (ANN.)</div><div style='color:var(--accent);font-size:1.8rem;'>{alpha*100:+.2f}%</div><div style='font-size:0.6rem;color:#8B95A8;'>p={p_alpha:.3f}</div></div>
-<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>MARKET BETA</div><div style='color:var(--purple);font-size:1.8rem;'>{beta:.3f}</div></div>
-<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>R-SQUARED</div><div style='color:#EBEEF5;font-size:1.8rem;'>{model.rsquared:.3f}</div></div>
-<div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>SHARPE RATIO</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_s:.3f}</div></div>
-</div>""", unsafe_allow_html=True)
-
-# PERMUTATION
-st.markdown("<h2>07 — STATISTICAL SIGNIFICANCE (PERMUTATION TEST)</h2>", unsafe_allow_html=True)
-
-n_perm = 1000
-pos = res['Pos'].values
-br = res['R_ret'].values
-sr = res['S_ret'].values
-
-perm_sh = []
-np.random.seed(42)
-for _ in range(n_perm):
-    shuf = np.random.permutation(pos)
-    pr = np.where(shuf==1, br, sr)
-    p_sh, _, _, _, _ = stats(pd.Series(pr))
-    perm_sh.append(p_sh)
-
-perm_sh = np.array(perm_sh)
-p_val = (perm_sh >= sh_s).mean()
-
-mc1,mc2,mc3 = st.columns(3)
-mc1.markdown(f"<div style='background:var(--panel);padding:15px;border-left:2px solid var(--accent);'><div style='font-size:0.7rem;color:#8B95A8;'>ACTUAL SHARPE</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_s:.4f}</div></div>", unsafe_allow_html=True)
-mc2.markdown(f"<div style='background:var(--panel);padding:15px;border-left:2px solid var(--accent);'><div style='font-size:0.7rem;color:#8B95A8;'>PERMUTATION P-VALUE</div><div style='color:var(--accent);font-size:1.8rem;'>{p_val:.4f}</div></div>", unsafe_allow_html=True)
-mc3.markdown(f"<div style='background:var(--panel);padding:15px;border-left:2px solid var(--accent);'><div style='font-size:0.7rem;color:#8B95A8;'>RANDOM STRATEGIES BEATEN</div><div style='color:var(--accent);font-size:1.8rem;'>{(1-p_val)*100:.1f}%</div></div>", unsafe_allow_html=True)
-
-fig4 = go.Figure()
-fig4.add_trace(go.Histogram(x=perm_sh, nbinsx=50, marker_color='#2C3243'))
-fig4.add_vline(x=sh_s, line_color='#00FFB2', line_width=3)
-fig4.add_vline(x=np.percentile(perm_sh, 95), line_color='#FF3B6B', line_dash='dash', line_width=2)
-
-fig4.update_layout(height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                   font=dict(color='#EBEEF5'), xaxis_title="Sharpe Ratio", yaxis_title="Frequency",
-                   showlegend=False)
-st.plotly_chart(fig4, use_container_width=True)
+st.markdown("---")
+st.markdown("<p style='text-align:center;color:#8B95A8;font-size:0.75rem;'>AMCE v8.0 | DYNAMIC HAVENS | NOT FINANCIAL ADVICE</p>", unsafe_allow_html=True)
