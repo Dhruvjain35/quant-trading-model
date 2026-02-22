@@ -1,6 +1,6 @@
 """
-ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v4.0
-THE DEEP-HISTORY MODEL - TRAINED ON THE 90s, TESTED ON THE 2000s
+ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v5.0
+THE BALANCED MODEL - DEEP HISTORY WITH ASYMMETRIC RECOVERY
 """
 
 import streamlit as st
@@ -38,7 +38,6 @@ h2 {color:#8B95A8;font-size:0.8rem;letter-spacing:0.15em;border-bottom:1px solid
 @st.cache_data
 def load_data(risk, safe):
     tickers = [risk, safe, '^VIX', '^TNX']
-    # PULLING DATA FROM 1993 TO CATCH THE DOT-COM BUBBLE
     df = yf.download(tickers, start="1993-01-01", end="2026-01-01", progress=False)['Close']
     df.ffill(inplace=True)
     df.dropna(inplace=True)
@@ -54,8 +53,9 @@ def engineer_features(df):
     data['Fwd_Ret'] = data['Risk'].shift(-1) / data['Risk'] - 1
     data['Target'] = (data['Fwd_Ret'] > 0).astype(int)
     
-    # STRIPPED DOWN MACRO FEATURES
-    data['Mom_3M'] = data['Risk'].pct_change(63)
+    # ENHANCED MACRO FEATURES
+    data['Mom_1M'] = data['Risk'].pct_change(21) # Fast momentum to catch V-bottoms
+    data['Mom_3M'] = data['Risk'].pct_change(63) # Slow momentum
     data['MA_200_Dist'] = data['Risk'] / data['Risk'].rolling(200).mean() - 1
     data['Yield_Mom'] = data['Yield'].pct_change(21)
     
@@ -66,11 +66,10 @@ def engineer_features(df):
     data['Vol_Ratio_MA'] = data['Vol_Ratio'].rolling(63).mean()
     
     data.dropna(inplace=True)
-    features = ['Mom_3M', 'MA_200_Dist', 'Yield_Mom', 'Vol_Ratio']
+    features = ['Mom_1M', 'Mom_3M', 'MA_200_Dist', 'Yield_Mom', 'Vol_Ratio']
     return data, features
 
 def train_ensemble(data, features, embargo):
-    # TRAIN ON 40% (Gets us through roughly 2006). OOS TESTING ON EVERYTHING AFTER.
     split = int(len(data) * 0.40)
     embargo_days = int((embargo / 12) * 252)
     test_start = split + embargo_days
@@ -84,9 +83,9 @@ def train_ensemble(data, features, embargo):
     X_tr, y_tr = train[features], train['Target']
     X_te = test[features]
     
-    # EXTREME REGULARIZATION
-    rf = RandomForestClassifier(n_estimators=100, max_depth=2, min_samples_leaf=20, random_state=42)
-    gb = GradientBoostingClassifier(n_estimators=100, max_depth=2, learning_rate=0.01, random_state=42)
+    # BALANCED REGULARIZATION: Depth=3. Smart enough to learn, dumb enough to not overfit.
+    rf = RandomForestClassifier(n_estimators=100, max_depth=3, min_samples_leaf=15, random_state=42)
+    gb = GradientBoostingClassifier(n_estimators=100, max_depth=3, learning_rate=0.01, random_state=42)
     
     rf.fit(X_tr, y_tr)
     gb.fit(X_tr, y_tr)
@@ -96,17 +95,18 @@ def train_ensemble(data, features, embargo):
     
     test['Prob_Avg'] = (prob_rf + prob_gb) / 2
     
-    # Smooth predictions to kill daily transaction costs
+    # Smooth predictions
     test['Prob_Smooth'] = test['Prob_Avg'].ewm(span=10).mean()
     
-    # Hysteresis Logic
-    conditions = [test['Prob_Smooth'] > 0.52, test['Prob_Smooth'] < 0.48]
+    # Tighter Hysteresis Logic (More responsive to re-entering the market)
+    conditions = [test['Prob_Smooth'] > 0.51, test['Prob_Smooth'] < 0.49]
     choices = [1, 0]
     test['Raw_Signal'] = np.select(conditions, choices, default=np.nan)
     test['Signal'] = test['Raw_Signal'].ffill().fillna(1)
     
-    # THE MACRO OVERRIDE (Trend Following Veto)
-    crash_condition = (test['MA_200_Dist'] < 0) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'])
+    # RELAXED MACRO OVERRIDE
+    # Only veto if the asset is deeply broken (-2% under MA) AND vol is severely expanding (+5% over MA)
+    crash_condition = (test['MA_200_Dist'] < -0.02) & (test['Vol_Ratio'] > test['Vol_Ratio_MA'] * 1.05)
     test.loc[crash_condition, 'Signal'] = 0
     
     return test, rf, train, test
@@ -142,9 +142,8 @@ def stats(rets):
     return sh, sort, tot, ann, dd
 
 # SIDEBAR
-st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V4.0</h3></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<div style='margin-bottom:20px;'><h3>RESEARCH TERMINAL<br>V5.0</h3></div>", unsafe_allow_html=True)
 st.sidebar.markdown("**Model Controls**")
-# DEEP HISTORY PROXIES
 risk = st.sidebar.text_input("High-Beta Asset", "^NDX")
 safe = st.sidebar.text_input("Risk-Free Asset", "VFISX")
 embargo = st.sidebar.slider("Purged Embargo (Months)", 0, 12, 4)
@@ -158,7 +157,6 @@ st.sidebar.caption("Regime-Filtered Boosting • Purged walk-forward validation 
 run = st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True)
 
 if not run:
-    # HOME SCREEN
     st.markdown("QUANTITATIVE RESEARCH LAB")
     st.markdown("<h1>Adaptive Macro-Conditional Ensemble</h1>", unsafe_allow_html=True)
     st.caption("AMCE FRAMEWORK • REGIME FILTERED • ENSEMBLE VOTING • STATISTICAL VALIDATION")
@@ -174,7 +172,7 @@ if not run:
     st.stop()
 
 # EXECUTE
-with st.status("Booting AMCE Deep-History...", expanded=True) as status:
+with st.status("Booting AMCE Balanced Model...", expanded=True) as status:
     st.write("1/4: Loading historical data...")
     t0 = time.time()
     raw = load_data(risk, safe)
@@ -298,7 +296,6 @@ crises = {
 }
 
 c_data = []
-# Check both full raw data (for in-sample crises) and res data (for OOS crises)
 for name, dates in crises.items():
     try:
         if "In-Sample" in name:
@@ -419,4 +416,4 @@ if len(test_df) > 100:
         st.pyplot(f, clear_figure=True)
 
 st.markdown("---")
-st.markdown("<p style='text-align:center;color:#8B95A8;font-size:0.75rem;'>AMCE v4.0 | STRICT OOS VALIDATION | DEEP HISTORY | NOT FINANCIAL ADVICE</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;color:#8B95A8;font-size:0.75rem;'>AMCE v5.0 | BALANCED OOS VALIDATION | ASYMMETRIC RECOVERY | NOT FINANCIAL ADVICE</p>", unsafe_allow_html=True)
