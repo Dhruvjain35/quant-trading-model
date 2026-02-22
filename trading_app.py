@@ -1,156 +1,119 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import shap
+import matplotlib.pyplot as plt
 from scipy import stats
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.model_selection import train_test_split
 
 # ==========================================
-# 1. DATA & FEATURE ENGINEERING (NO LEAKAGE)
+# UI CONFIG & STYLING
 # ==========================================
-def fetch_and_engineer_data(risk_ticker='QQQ', safe_ticker='SHY'):
-    """Fetches data and creates features using ONLY strictly historical data."""
-    df_risk = yf.download(risk_ticker, period='20y', interval='1d')['Close'].rename('Close_Risk').to_frame()
-    df_safe = yf.download(safe_ticker, period='20y', interval='1d')['Close'].rename('Close_Safe').to_frame()
+st.set_page_config(page_title="Quant ML Engine", layout="wide")
+st.title("Machine Learning Strategy Backtester")
+st.markdown("Strict Out-of-Sample testing. Zero lookahead bias. Path-dependent tax/friction logic.")
+
+# ==========================================
+# 1. ENGINE: DATA & ML (CACHED FOR SPEED)
+# ==========================================
+@st.cache_data
+def fetch_and_engineer_data(risk_ticker, safe_ticker):
+    df_risk = yf.download(risk_ticker, period='15y', interval='1d')['Close'].rename('Close_Risk').to_frame()
+    df_safe = yf.download(safe_ticker, period='15y', interval='1d')['Close'].rename('Close_Safe').to_frame()
     
     df = df_risk.join(df_safe, how='inner').dropna()
-    
-    # Calculate daily returns
     df['Ret_Risk'] = df['Close_Risk'].pct_change()
     df['Ret_Safe'] = df['Close_Safe'].pct_change()
     
-    # Features (Everything MUST be shifted later to prevent lookahead bias)
+    # Features
     df['Mom_1M'] = df['Close_Risk'].pct_change(21)
     df['Mom_3M'] = df['Close_Risk'].pct_change(63)
     df['Vol_1M'] = df['Ret_Risk'].rolling(21).std() * np.sqrt(252)
-    df['RSI_14'] = compute_rsi(df['Close_Risk'], 14)
+    
+    delta = df['Close_Risk'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI_14'] = 100 - (100 / (1 + rs))
     df['SMA_50_Dist'] = (df['Close_Risk'] / df['Close_Risk'].rolling(50).mean()) - 1
     
     df.dropna(inplace=True)
-    
-    # Target: Did the risk asset go up TOMORROW? 
-    # (We shift the target backwards, meaning today's row has tomorrow's outcome)
-    df['Target'] = (df['Ret_Risk'].shift(-1) > 0).astype(int)
+    df['Target'] = (df['Ret_Risk'].shift(-1) > 0).astype(int) # Target is tomorrow's direction
     df.dropna(inplace=True)
-    
     return df
 
-def compute_rsi(series, period):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-# ==========================================
-# 2. ML TRAINING (STRICT OUT-OF-SAMPLE)
-# ==========================================
+@st.cache_resource
 def train_and_predict(df):
-    """Trains on the past, predicts on the future. Zero data leakage."""
     features = ['Mom_1M', 'Mom_3M', 'Vol_1M', 'RSI_14', 'SMA_50_Dist']
-    
-    # Chronological split: 70% Train, 30% Out-of-Sample (OOS) Test
     split_idx = int(len(df) * 0.7)
-    train_df = df.iloc[:split_idx]
-    test_df = df.iloc[split_idx:]
+    train_df, test_df = df.iloc[:split_idx], df.iloc[split_idx:]
     
     X_train, y_train = train_df[features], train_df['Target']
     X_test, y_test = test_df[features], test_df['Target']
     
-    # Initialize Models
     rf = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
     gb = GradientBoostingClassifier(n_estimators=100, max_depth=3, random_state=42)
     
-    # Train
     rf.fit(X_train, y_train)
     gb.fit(X_train, y_train)
     
-    # Predict probabilities on Out-Of-Sample data
     rf_probs = rf.predict_proba(X_test)[:, 1]
     gb_probs = gb.predict_proba(X_test)[:, 1]
     
-    # Ensemble Vote
     test_df = test_df.copy()
     test_df['Prob_Up'] = (rf_probs + gb_probs) / 2
     
-    # Generate SHAP values for the OOS data using the Random Forest
     explainer = shap.TreeExplainer(rf)
     shap_values = explainer.shap_values(X_test)
-    
-    # For binary classification in newer SHAP versions, extract the positive class
     if isinstance(shap_values, list):
         shap_values = shap_values[1] 
         
-    return test_df, X_test, shap_values, explainer.expected_value
+    return test_df, X_test, shap_values
 
 # ==========================================
-# 3. PATH-DEPENDENT BACKTESTER (THE FIX)
+# 2. ENGINE: PATH-DEPENDENT BACKTESTER
 # ==========================================
-def run_backtest(test_df, start_capital=100000.0, cost_bps=5, tax_st=0.22, tax_lt=0.15):
-    """
-    Simulates a real brokerage account. Taxes are paid from cash, not percentage returns.
-    """
+def run_backtest(test_df, start_capital, cost_bps, tax_st, tax_lt):
     capital = start_capital
-    position = 0 # 1 for Long QQQ, 0 for Cash/SHY
-    entry_price = 0.0
+    position = 0 
     days_held = 0
-    
-    equity_curve = []
+    equity_curve, benchmark_curve = [], []
     benchmark_capital = start_capital
-    benchmark_curve = []
-    
-    # Transaction cost as a decimal
     cost_pct = cost_bps / 10000.0 
     
     for i in range(len(test_df)):
         row = test_df.iloc[i]
-        today_price_risk = row['Close_Risk']
-        today_price_safe = row['Close_Safe']
         prob_up = row['Prob_Up']
         
-        # Benchmark update (Buy and hold QQQ)
-        if i > 0:
-            benchmark_capital = benchmark_capital * (1 + row['Ret_Risk'])
+        if i > 0: benchmark_capital *= (1 + row['Ret_Risk'])
         benchmark_curve.append(benchmark_capital)
-        
-        # --- STRATEGY LOGIC ---
-        # We trade at the close based on the signal generated today
         
         target_position = 1 if prob_up > 0.50 else 0
         
-        # If we need to SELL
         if position == 1 and target_position == 0:
-            # Calculate total sale value minus slippage
-            gross_sale = capital * (1 + row['Ret_Risk']) # Capital grew today
-            gross_sale -= (gross_sale * cost_pct) # Pay broker
-            
-            # Calculate Taxes
-            gain = gross_sale - capital  # Simplified gain calculation
+            gross_sale = capital * (1 + row['Ret_Risk'])
+            gross_sale -= (gross_sale * cost_pct)
+            gain = gross_sale - capital
             if gain > 0:
                 tax_rate = tax_lt if days_held >= 252 else tax_st
-                tax_owed = gain * tax_rate
-                gross_sale -= tax_owed
-                
+                gross_sale -= (gain * tax_rate)
             capital = gross_sale
             position = 0
             days_held = 0
             
-        # If we need to BUY
         elif position == 0 and target_position == 1:
-            capital = capital * (1 + row['Ret_Safe']) # Earned safe yield today
-            capital -= (capital * cost_pct) # Pay broker to enter risk asset
+            capital = capital * (1 + row['Ret_Safe'])
+            capital -= (capital * cost_pct)
             position = 1
             days_held = 1
             
-        # If we are HOLDING RISK
         elif position == 1 and target_position == 1:
-            capital = capital * (1 + row['Ret_Risk'])
+            capital *= (1 + row['Ret_Risk'])
             days_held += 1
             
-        # If we are HOLDING SAFE
         elif position == 0 and target_position == 0:
-            capital = capital * (1 + row['Ret_Safe'])
+            capital *= (1 + row['Ret_Safe'])
             
         equity_curve.append(capital)
         
@@ -162,63 +125,86 @@ def run_backtest(test_df, start_capital=100000.0, cost_bps=5, tax_st=0.22, tax_l
     return test_df
 
 # ==========================================
-# 4. STATISTICAL VALIDATION & METRICS
+# 3. SIDEBAR UI 
 # ==========================================
-def calculate_metrics(test_df):
-    """Calculates standard quant metrics on the OOS equity curves."""
-    strat_ret = test_df['Strategy_Ret']
-    bench_ret = test_df['Benchmark_Ret']
+with st.sidebar:
+    st.header("Model Parameters")
+    risk_ticker = st.text_input("Risk Asset", value="QQQ")
+    safe_ticker = st.text_input("Safe Asset", value="SHY")
     
-    # Annualized Returns
-    days = len(test_df)
-    ann_strat = (test_df['Strategy_Equity'].iloc[-1] / test_df['Strategy_Equity'].iloc[0]) ** (252/days) - 1
-    ann_bench = (test_df['Benchmark_Equity'].iloc[-1] / test_df['Benchmark_Equity'].iloc[0]) ** (252/days) - 1
+    st.header("Friction & Taxes")
+    start_capital = st.number_input("Starting Capital", value=100000)
+    cost_bps = st.number_input("Slippage/Fees (BPS)", value=5)
+    tax_st = st.slider("Short-Term Tax %", 0, 50, 22) / 100.0
+    tax_lt = st.slider("Long-Term Tax %", 0, 50, 15) / 100.0
     
-    # Volatility
-    vol_strat = strat_ret.std() * np.sqrt(252)
-    
-    # Sharpe (assuming 0 risk-free rate for simplicity, or subtract SHY yield)
-    sharpe = ann_strat / vol_strat if vol_strat != 0 else 0
-    
-    # Max Drawdown
-    roll_max = test_df['Strategy_Equity'].cummax()
-    drawdown = (test_df['Strategy_Equity'] / roll_max) - 1
-    max_dd = drawdown.min()
-    
-    # P-Value (T-Test on daily returns vs benchmark)
-    t_stat, p_val = stats.ttest_ind(strat_ret, bench_ret, equal_var=False)
-    
-    return {
-        "Ann_Return": ann_strat,
-        "Bench_Return": ann_bench,
-        "Sharpe": sharpe,
-        "Max_Drawdown": max_dd,
-        "P_Value": p_val
-    }
+    run_button = st.button("Run Simulation", type="primary")
 
-def run_monte_carlo(test_df, sims=500):
-    """Resamples daily strategy returns to test robustness."""
-    strat_ret = test_df['Strategy_Ret'].values
-    sim_paths = []
-    
-    for _ in range(sims):
-        # Sample with replacement
-        random_path = np.random.choice(strat_ret, size=len(strat_ret), replace=True)
-        # Rebuild equity curve
-        sim_curve = (1 + random_path).cumprod() * 100000
-        sim_paths.append(sim_curve)
+# ==========================================
+# 4. MAIN DASHBOARD LOGIC
+# ==========================================
+if run_button:
+    with st.spinner("Fetching data and training ML Models out-of-sample..."):
+        # 1. Run Pipeline
+        df = fetch_and_engineer_data(risk_ticker, safe_ticker)
+        test_df, X_test, shap_values = train_and_predict(df)
+        res_df = run_backtest(test_df, start_capital, cost_bps, tax_st, tax_lt)
         
-    return sim_paths
+        # 2. Calculate Metrics
+        days = len(res_df)
+        ann_strat = (res_df['Strategy_Equity'].iloc[-1] / start_capital) ** (252/days) - 1
+        ann_bench = (res_df['Benchmark_Equity'].iloc[-1] / start_capital) ** (252/days) - 1
+        vol_strat = res_df['Strategy_Ret'].std() * np.sqrt(252)
+        sharpe = ann_strat / vol_strat if vol_strat != 0 else 0
+        max_dd = ((res_df['Strategy_Equity'] / res_df['Strategy_Equity'].cummax()) - 1).min()
+        t_stat, p_val = stats.ttest_ind(res_df['Strategy_Ret'], res_df['Benchmark_Ret'], equal_var=False)
 
-def get_crisis_alpha(test_df):
-    """Isolates performance during the 2022 tech crash as an example."""
-    try:
-        crash_data = test_df.loc['2022-01-01':'2022-12-31']
-        if len(crash_data) == 0:
-            return "No 2022 data in Out-of-Sample period"
+        # 3. Build UI Tabs
+        tab1, tab2, tab3, tab4 = st.tabs(["Equity & Stats", "Monte Carlo", "SHAP Output", "Crisis Alpha"])
+        
+        with tab1:
+            st.subheader("Out-of-Sample Equity Curve")
+            st.line_chart(res_df[['Strategy_Equity', 'Benchmark_Equity']])
             
-        strat_crash = (crash_data['Strategy_Equity'].iloc[-1] / crash_data['Strategy_Equity'].iloc[0]) - 1
-        bench_crash = (crash_data['Benchmark_Equity'].iloc[-1] / crash_data['Benchmark_Equity'].iloc[0]) - 1
-        return {"Strategy_2022": strat_crash, "Benchmark_2022": bench_crash}
-    except:
-        return "Insufficient data"
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("Strategy CAGR", f"{ann_strat*100:.2f}%")
+            col2.metric("Benchmark CAGR", f"{ann_bench*100:.2f}%")
+            col3.metric("Max Drawdown", f"{max_dd*100:.2f}%")
+            col4.metric("Sharpe Ratio", f"{sharpe:.2f}")
+            col5.metric("P-Value", f"{p_val:.4f}", help="< 0.05 means statistically significant alpha")
+            
+        with tab2:
+            st.subheader("Monte Carlo Path Simulation (500 Runs)")
+            sims = 500
+            strat_ret = res_df['Strategy_Ret'].values
+            sim_df = pd.DataFrame()
+            for i in range(sims):
+                random_path = np.random.choice(strat_ret, size=len(strat_ret), replace=True)
+                sim_df[f'Sim_{i}'] = (1 + random_path).cumprod() * start_capital
+            
+            # Plot subset for performance
+            st.line_chart(sim_df.iloc[:, :50])
+            st.caption("Displaying 50 out of 500 simulated paths based on randomized OOS returns.")
+            
+        with tab3:
+            st.subheader("Feature Importance (SHAP)")
+            st.markdown("Shows how each feature influenced the ML model's prediction to go Long.")
+            fig, ax = plt.subplots(figsize=(8, 5))
+            shap.summary_plot(shap_values, X_test, show=False)
+            st.pyplot(fig)
+            
+        with tab4:
+            st.subheader("Crisis Alpha: 2022 Tech Crash")
+            try:
+                crash_data = res_df.loc['2022-01-01':'2022-12-31']
+                if not crash_data.empty:
+                    strat_crash = (crash_data['Strategy_Equity'].iloc[-1] / crash_data['Strategy_Equity'].iloc[0]) - 1
+                    bench_crash = (crash_data['Benchmark_Equity'].iloc[-1] / crash_data['Benchmark_Equity'].iloc[0]) - 1
+                    c1, c2 = st.columns(2)
+                    c1.metric("Strategy 2022 Return", f"{strat_crash*100:.2f}%")
+                    c2.metric("Benchmark 2022 Return", f"{bench_crash*100:.2f}%")
+                    st.line_chart(crash_data[['Strategy_Equity', 'Benchmark_Equity']])
+                else:
+                    st.warning("OOS period does not cover 2022. Increase the yfinance fetch period.")
+            except KeyError:
+                st.warning("Date index issue extracting 2022 data.")
