@@ -1,6 +1,6 @@
 """
 ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v3.0
-THE LEGENDARY MODEL - EXACT REPLICA FROM SCREENSHOTS
+THE LEGENDARY MODEL - STRICT OUT-OF-SAMPLE OOS (NO LEAKAGE)
 """
 
 import streamlit as st
@@ -48,7 +48,8 @@ def load_data(risk, safe):
 
 def engineer_features(df):
     data = df.copy()
-    data['Fwd_Ret'] = data['Risk'].shift(-5) / data['Risk'] - 1
+    # FIX 1: Shift(-1) perfectly matches daily trading backtest.
+    data['Fwd_Ret'] = data['Risk'].shift(-1) / data['Risk'] - 1
     data['Target'] = (data['Fwd_Ret'] > 0).astype(int)
     
     data['Mom_1M'] = data['Risk'].pct_change(21)
@@ -75,7 +76,7 @@ def train_ensemble(data, features, embargo):
         test_start = split + 1
     
     train = data.iloc[:split]
-    test = data.iloc[test_start:]
+    test = data.iloc[test_start:].copy() # explicit copy for safety
     
     X_tr, y_tr = train[features], train['Target']
     X_te = test[features]
@@ -86,17 +87,20 @@ def train_ensemble(data, features, embargo):
     rf.fit(X_tr, y_tr)
     gb.fit(X_tr, y_tr)
     
-    # Predict on FULL dataset (this is what made it work)
-    X_all = data[features]
-    prob_rf = rf.predict_proba(X_all)[:,1]
-    prob_gb = gb.predict_proba(X_all)[:,1]
+    # FIX 2: NO DATA LEAKAGE. ONLY PREDICT ON X_te (OUT OF SAMPLE)
+    prob_rf = rf.predict_proba(X_te)[:,1]
+    prob_gb = gb.predict_proba(X_te)[:,1]
     
-    data['Prob_RF'] = prob_rf
-    data['Prob_GB'] = prob_gb
-    data['Prob_Avg'] = (prob_rf + prob_gb) / 2
-    data['Signal'] = (data['Prob_Avg'] > 0.50).astype(int)
+    test['Prob_RF'] = prob_rf
+    test['Prob_GB'] = prob_gb
+    test['Prob_Avg'] = (prob_rf + prob_gb) / 2
     
-    return data, rf, train, test
+    # Smooth signal to survive daily friction
+    test['Prob_Smooth'] = test['Prob_Avg'].ewm(span=5).mean()
+    test['Signal'] = (test['Prob_Smooth'] > 0.50).astype(int)
+    
+    # Return ONLY the test set to run through the backtester
+    return test, rf, train, test
 
 def backtest(data, cost_bps, slip_bps):
     df = data.copy()
@@ -168,11 +172,12 @@ with st.status("Booting AMCE...", expanded=True) as status:
     
     st.write("3/4: Training ensemble...")
     t1 = time.time()
-    ml_data, rf_model, train_df, test_df = train_ensemble(data, feats, embargo)
+    # FIX 3: test_data is now ONLY the strict out-of-sample data
+    test_data, rf_model, train_df, test_df = train_ensemble(data, feats, embargo)
     st.write(f"✅ Models: {len(train_df)} train, {len(test_df)} test ({time.time()-t1:.1f}s)")
     
-    st.write("4/4: Running backtest...")
-    res = backtest(ml_data, tc, slip)
+    st.write("4/4: Running backtest (STRICT OUT OF SAMPLE)...")
+    res = backtest(test_data, tc, slip)
     
     status.update(label="✅ Complete!", state="complete", expanded=False)
 
@@ -183,7 +188,7 @@ sh_b, sort_b, tot_b, ann_b, dd_b = stats(res['R_ret'])
 # HEADER
 st.markdown("QUANTITATIVE RESEARCH LAB")
 st.markdown("<h1>Adaptive Macro-Conditional Ensemble</h1>", unsafe_allow_html=True)
-st.caption("AMCE FRAMEWORK • REGIME FILTERED • ENSEMBLE VOTING • STATISTICAL VALIDATION")
+st.caption("AMCE FRAMEWORK • REGIME FILTERED • ENSEMBLE VOTING • STRICT OUT-OF-SAMPLE VALIDATION")
 
 st.markdown("""
 <div style="background:rgba(124,77,255,0.1);padding:20px;border-radius:4px;border:1px solid rgba(124,77,255,0.2);margin-top:10px;">
@@ -195,7 +200,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # METRICS
-st.markdown("<h2>01 — EXECUTIVE RISK SUMMARY</h2>", unsafe_allow_html=True)
+st.markdown("<h2>01 — EXECUTIVE RISK SUMMARY (OOS DATA ONLY)</h2>", unsafe_allow_html=True)
 c1,c2,c3,c4,c5 = st.columns(5)
 
 def box(lbl, val, bench, pct=False):
@@ -300,6 +305,8 @@ if c_data:
         html += f"<tr style='border-bottom:1px solid rgba(255,255,255,0.05);'><td style='padding:10px;font-family:monospace;'>{row[0]}</td><td>{row[1]}</td><td>{row[2]}</td><td style='color:{col};font-weight:bold;'>{row[3]}</td><td>{row[4]}</td></tr>"
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
+else:
+    st.info("No major crisis dates fall within the current test period.")
 
 # FACTOR DECOMP
 st.markdown("<h2>05 — FACTOR DECOMPOSITION (OLS ALPHA) & STABILITY</h2>", unsafe_allow_html=True)
@@ -391,4 +398,4 @@ if len(test_df) > 100:
         st.pyplot(f, clear_figure=True)
 
 st.markdown("---")
-st.markdown("<p style='text-align:center;color:#8B95A8;font-size:0.75rem;'>AMCE v3.0 | NOT FINANCIAL ADVICE</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;color:#8B95A8;font-size:0.75rem;'>AMCE v3.0 | STRICT OOS VALIDATION | NOT FINANCIAL ADVICE</p>", unsafe_allow_html=True)
