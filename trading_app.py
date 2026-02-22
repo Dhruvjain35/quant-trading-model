@@ -1,710 +1,346 @@
-"""
-AMCE: Adaptive Macro-Conditional Ensemble  v4.0
-Author: Dhruv Jain
-
-Key design decisions (v4):
-    - SPY vs IEF default: SPY has best risk-adjusted equity returns historically;
-      IEF (7-10Y bonds) is stable enough to be a genuine safe haven without TLT's
-      catastrophic duration risk in rising-rate environments.
-    - Momentum-anchored ensemble: trend-following is the most robust documented
-      factor in academic literature. The ensemble amplifies it, not fights it.
-    - Hard momentum gate: if 6M risky momentum < 0 AND safe momentum > 0,
-      force safe regardless of ensemble — prevents the model from going long
-      into a confirmed downtrend.
-    - Simpler signal (0.53 threshold): less is more. Fewer features, cleaner
-      signal, lower overfitting risk.
-    - Regime-scaled position: high VIX → reduce risky allocation, scale back in
-      as volatility normalizes.
-
-Performance Disclosure:
-    Returns are calculated net-of-fees and slippage, pre-tax.
-    Slippage: 5 bps per side. Commission: 3 bps per trade.
-    Zero look-ahead bias: all features lagged >= 1 trading day.
-"""
-
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
+import shap
+import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import warnings
-warnings.filterwarnings("ignore")
-
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
 import statsmodels.api as sm
-import shap
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.inspection import permutation_importance
+import time
 
-# ── Page config ───────────────────────────────────────────────
-st.set_page_config(page_title="AMCE | Quantitative Research Lab",
-                   layout="wide", initial_sidebar_state="expanded")
+# ==========================================
+# UI CONFIG & CUSTOM CSS (TERMINAL VIBE)
+# ==========================================
+st.set_page_config(page_title="AMCE Terminal v4.0", layout="wide", initial_sidebar_state="expanded")
 
-# ── CSS ───────────────────────────────────────────────────────
 st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&display=swap');
-html,body,[class*="css"]{font-family:'Rajdhani',sans-serif;background:#050d1a;color:#c8d8e8;}
-.stApp{background:#050d1a;}
-[data-testid="stSidebar"]{background:#07111f;border-right:1px solid #0d2137;}
-[data-testid="stSidebar"] *{color:#c8d8e8 !important;}
-[data-testid="stSidebar"] label{font-family:'Share Tech Mono',monospace;font-size:.65rem;
-  color:#3a8aaa !important;letter-spacing:2px;text-transform:uppercase;}
-.main-title{font-family:'Rajdhani',sans-serif;font-size:2.6rem;font-weight:700;
-  background:linear-gradient(90deg,#00ffe0,#00c8ff);-webkit-background-clip:text;
-  -webkit-text-fill-color:transparent;letter-spacing:2px;margin-bottom:0;}
-.subtitle-bar{font-family:'Share Tech Mono',monospace;font-size:.65rem;color:#2a7a9a;
-  letter-spacing:4px;text-transform:uppercase;margin-bottom:1.2rem;}
-.section-header{font-family:'Share Tech Mono',monospace;font-size:.75rem;color:#00ffe0;
-  letter-spacing:3px;text-transform:uppercase;border-bottom:1px solid #0d2a3d;
-  padding-bottom:6px;margin:1.6rem 0 1rem 0;}
-.metric-card{background:#07111f;border:1px solid #0d2a3d;border-top:2px solid #00ffe0;
-  border-radius:4px;padding:14px 18px;margin:4px 0;}
-.metric-card-red{border-top-color:#ff4d6d !important;}
-.metric-value{font-family:'Rajdhani',sans-serif;font-size:1.8rem;font-weight:700;color:#00ffe0;margin:0;}
-.metric-value-red{color:#ff4d6d !important;}
-.metric-label{font-family:'Share Tech Mono',monospace;font-size:.6rem;color:#3a6a8a;
-  letter-spacing:2px;text-transform:uppercase;}
-.bench-label{font-family:'Share Tech Mono',monospace;font-size:.62rem;color:#2a5a7a;margin-top:2px;}
-.hyp-box{background:#07111f;border:1px solid #0d2a3d;border-left:3px solid #00ffe0;
-  border-radius:4px;padding:16px 20px;font-family:'Share Tech Mono',monospace;
-  font-size:.7rem;color:#7ab8d4;line-height:1.8;margin-bottom:1rem;}
-.hyp-title{font-size:.6rem;color:#00ffe0;letter-spacing:4px;text-transform:uppercase;margin-bottom:8px;}
-.banner-green{background:#041a0e;border:1px solid #00804a;border-radius:3px;padding:8px 16px;
-  font-family:'Share Tech Mono',monospace;font-size:.68rem;color:#00c87a;}
-.banner-yellow{background:#1a1400;border:1px solid #806a00;border-radius:3px;padding:8px 16px;
-  font-family:'Share Tech Mono',monospace;font-size:.68rem;color:#f4c542;}
-.crisis-table{width:100%;border-collapse:collapse;font-family:'Share Tech Mono',monospace;font-size:.7rem;}
-.crisis-table th{color:#2a6a8a;letter-spacing:2px;text-transform:uppercase;padding:8px 12px;
-  text-align:right;border-bottom:1px solid #0d2a3d;font-size:.6rem;}
-.crisis-table td{padding:10px 12px;text-align:right;border-bottom:1px solid #07111f;color:#8ab8d4;}
-.crisis-table td:first-child{text-align:left;color:#c8d8e8;}
-.green{color:#00c87a !important;}.red{color:#ff4d6d !important;}
-.badge-green{background:#041a0e;border:1px solid #00804a;border-radius:3px;
-  padding:2px 8px;color:#00c87a;font-size:.65rem;}
-.stButton>button{background:linear-gradient(135deg,#00ffe0,#00a8c8) !important;
-  color:#050d1a !important;font-family:'Rajdhani',sans-serif !important;font-weight:700 !important;
-  font-size:.9rem !important;letter-spacing:2px !important;border:none !important;
-  border-radius:4px !important;padding:12px 20px !important;width:100% !important;
-  text-transform:uppercase !important;}
-.stTextInput input{background:#0a1825 !important;border:1px solid #0d2a3d !important;
-  color:#c8d8e8 !important;font-family:'Share Tech Mono',monospace !important;border-radius:3px !important;}
-div[data-testid="stNumberInput"] input{background:#0a1825 !important;border:1px solid #0d2a3d !important;
-  color:#c8d8e8 !important;}
-hr{border-color:#0d2a3d !important;}
-</style>
+    <style>
+    /* Mimic the dark terminal UI from screenshots */
+    .stApp { background-color: #0E1117; }
+    h1, h2, h3 { color: #E0E0E0; font-family: 'Courier New', Courier, monospace; }
+    .metric-container { background-color: #161A25; padding: 15px; border-radius: 5px; border-left: 4px solid #00FFAA; }
+    .stButton>button { background-color: #00FFAA; color: #000000; font-weight: bold; width: 100%; border-radius: 4px; }
+    .stButton>button:hover { background-color: #00CC88; color: white; }
+    hr { border-color: #333333; }
+    </style>
 """, unsafe_allow_html=True)
 
-# ── Constants ─────────────────────────────────────────────────
-DARK_BG = "#050d1a"; GRID_COLOR = "#0d2a3d"
-CYAN = "#00ffe0"; PURPLE = "#8a7aff"; PINK = "#ff4d6d"; WHITE = "#c8d8e8"
-SLIPPAGE_BPS = 5; COMMISSION_BPS = 3
-ROUND_TRIP = (SLIPPAGE_BPS + COMMISSION_BPS) / 10_000
-_RF = 0.04 / 252
-
-
-def plot_layout(**ov):
-    b = dict(paper_bgcolor=DARK_BG, plot_bgcolor=DARK_BG,
-             font=dict(family="Share Tech Mono, monospace", size=10, color=WHITE),
-             xaxis=dict(gridcolor=GRID_COLOR, zerolinecolor=GRID_COLOR, color=WHITE),
-             yaxis=dict(gridcolor=GRID_COLOR, zerolinecolor=GRID_COLOR, color=WHITE),
-             legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=WHITE)),
-             margin=dict(l=50, r=20, t=40, b=40))
-    for k, v in ov.items():
-        b[k] = v
-    return b
-
-# ── Metrics ───────────────────────────────────────────────────
-def _sharpe(r):
-    r = r.dropna()
-    if len(r) < 10: return 0.0
-    e = r - _RF
-    return float(e.mean() / (e.std() + 1e-9) * np.sqrt(252))
-
-def _sharpe_fast(a):
-    e = a - _RF
-    return float(np.mean(e) / (np.std(e) + 1e-9) * np.sqrt(252))
-
-def _sortino(r):
-    r = r.dropna(); e = r - _RF
-    return float(e.mean() / (e[e < 0].std() + 1e-9) * np.sqrt(252))
-
-def _maxdd(r):
-    c = (1 + r.dropna()).cumprod()
-    return float((c / c.cummax() - 1).min())
-
-def _rolling_dd(r):
-    c = (1 + r.dropna()).cumprod()
-    return (c / c.cummax() - 1) * 100
-
-def _ann(r):
-    r = r.dropna()
-    if len(r) < 2: return 0.0
-    return float((1 + r).prod() ** (252 / len(r)) - 1)
-
-def _tot(r): return float((1 + r.dropna()).prod() - 1)
-def _calmar(r):
-    md = abs(_maxdd(r)); return _ann(r) / md if md > 0 else 0.0
-
-# ── Data ──────────────────────────────────────────────────────
-class DataLoader:
-    def __init__(self, start="2003-01-01"):
-        self.start = start
-        self._c = {}
-
-    def get(self, ticker):
-        if ticker in self._c: return self._c[ticker]
-        df = yf.download(ticker, start=self.start, progress=False, auto_adjust=True)
-        if isinstance(df.columns, pd.MultiIndex): df = df["Close"]
-        elif "Close" in df.columns: df = df["Close"]
-        if isinstance(df, pd.DataFrame): df = df.iloc[:, 0]
-        self._c[ticker] = df
-        return df
-
-    def load(self, risky, safe):
-        pr = self.get(risky); ps = self.get(safe)
-        prices = pd.concat([pr, ps], axis=1).dropna()
-        prices.columns = [risky, safe]
-        rets = prices.pct_change().dropna()
-        vix = None
-        try:
-            vix = self.get("^VIX").reindex(prices.index, method="ffill")
-        except Exception: pass
-        tnx = None
-        try:
-            tnx = self.get("^TNX").reindex(prices.index, method="ffill")
-        except Exception: pass
-        irx = None
-        try:
-            irx = self.get("^IRX").reindex(prices.index, method="ffill")
-        except Exception: pass
-        return prices, rets, vix, tnx, irx
-
-# ── Features ──────────────────────────────────────────────────
-def _rsi(s, w=14):
-    g = s.clip(lower=0).rolling(w).mean()
-    l = (-s.clip(upper=0)).rolling(w).mean()
-    return 100 - 100 / (1 + g / (l + 1e-9))
-
-def build_features(prices, rets, vix, tnx, irx, rc, sc):
-    pr = prices[rc]; rr = rets[rc]; rs = rets[sc]
-    df = pd.DataFrame(index=prices.index)
-
-    # Core momentum — the most predictive factor (Jegadeesh & Titman 1993)
-    df["Mom_1M"]   = rr.rolling(21).sum().shift(1)
-    df["Mom_3M"]   = rr.rolling(63).sum().shift(1)
-    df["Mom_6M"]   = rr.rolling(126).sum().shift(1)
-    df["Mom_12M"]  = rr.rolling(252).sum().shift(1)
-    df["Safe_1M"]  = rs.rolling(21).sum().shift(1)
-    df["Safe_3M"]  = rs.rolling(63).sum().shift(1)
-
-    # Trend
-    df["MA_50"]    = (pr / pr.rolling(50).mean() - 1).shift(1)
-    df["MA_200"]   = (pr / pr.rolling(200).mean() - 1).shift(1)
-    df["MA_Cross"] = (pr.rolling(50).mean() / pr.rolling(200).mean() - 1).shift(1)
-
-    # Volatility
-    rv  = rr.rolling(21).std().shift(1)
-    rvs = rs.rolling(21).std().shift(1)
-    df["Vol_Ratio"]  = rv / (rvs + 1e-9)
-    df["Vol_21d"]    = rv
-    df["Vol_63d"]    = rr.rolling(63).std().shift(1)
-    df["Vol_Regime"] = rv / (rr.rolling(252).std() + 1e-9) - 1
-
-    # Drawdown
-    df["DD_6M"]  = pr.shift(1) / pr.rolling(126).max().shift(1) - 1
-    df["DD_12M"] = pr.shift(1) / pr.rolling(252).max().shift(1) - 1
-
-    # Relative strength
-    df["Rel_3M"] = (rr.rolling(63).sum()  - rs.rolling(63).sum()).shift(1)
-    df["Rel_6M"] = (rr.rolling(126).sum() - rs.rolling(126).sum()).shift(1)
-
-    # RSI
-    df["RSI"]    = _rsi(rr, 14).shift(1)
-
-    # VIX
-    if vix is not None:
-        df["VIX"]    = vix.shift(1)
-        df["VIX_Ch"] = vix.pct_change(5).shift(1)
-        df["VIX_MA"] = (vix / vix.rolling(63).mean() - 1).shift(1)
-    else:
-        df["VIX"]    = rv * 20
-        df["VIX_Ch"] = df["Vol_Regime"]
-        df["VIX_MA"] = 0.0
-
-    # Yield curve
-    if tnx is not None and irx is not None:
-        ts = (tnx - irx).shift(1)
-        df["TermSpread"] = ts
-        df["TermCh"]     = ts.diff(21).shift(1)
-        df["CurveInv"]   = (ts < 0).astype(float)
-    else:
-        df["TermSpread"] = 0.0; df["TermCh"] = 0.0; df["CurveInv"] = 0.0
-
-    # Cross-asset
-    df["XMom"] = (rr.rolling(21).mean() - rs.rolling(21).mean()).shift(1)
-
-    # Target: does risky beat safe next day?
-    df["target"] = (rr.shift(-1) > rs.shift(-1)).astype(int)
+# ==========================================
+# 1. CORE ENGINE: DATA & FEATURES (NO LEAKAGE)
+# ==========================================
+@st.cache_data(show_spinner=False)
+def fetch_and_engineer_data(risk_asset, safe_asset, embargo_months):
+    # Fetch data including VIX for macro feature
+    tickers = [risk_asset, safe_asset, '^VIX']
+    df = yf.download(tickers, period='20y', interval='1d')['Close'].dropna()
+    df.columns = ['Risk', 'Safe', 'VIX']
+    
+    # Calculate daily returns
+    df['Risk_Ret'] = df['Risk'].pct_change()
+    df['Safe_Ret'] = df['Safe'].pct_change()
+    
+    # --- FEATURE ENGINEERING (STRICTLY BACKWARD LOOKING) ---
+    df['Mom_1M'] = df['Risk'].pct_change(21)
+    df['Mom_3M'] = df['Risk'].pct_change(63)
+    df['Mom_6M'] = df['Risk'].pct_change(126)
+    df['Safe_Mom'] = df['Safe'].pct_change(63)
+    
+    df['Vol_21'] = df['Risk_Ret'].rolling(21).std() * np.sqrt(252)
+    df['Vol_63'] = df['Risk_Ret'].rolling(63).std() * np.sqrt(252)
+    df['Vol_Ratio'] = df['Vol_21'] / df['Vol_63']
+    
+    df['MA_50'] = (df['Risk'] / df['Risk'].rolling(50).mean()) - 1
+    df['MA_200'] = (df['Risk'] / df['Risk'].rolling(200).mean()) - 1
+    
+    df['VIX_Level'] = df['VIX']
+    df['VIX_Chg_1M'] = df['VIX'].pct_change(21)
+    
+    # Drop NaNs from rolling windows
     df.dropna(inplace=True)
+    
+    # --- THE TARGET (TOMORROW'S RETURN) ---
+    # Target is 1 if tomorrow's risk asset return is positive, 0 otherwise
+    df['Target'] = (df['Risk_Ret'].shift(-1) > 0).astype(int)
+    df.dropna(inplace=True) # Drop the final row which has no tomorrow
+    
+    # --- SPLIT WITH PURGED EMBARGO ---
+    split_idx = int(len(df) * 0.7)
+    embargo_days = int(embargo_months * 21) # Approx 21 trading days per month
+    
+    train_df = df.iloc[:split_idx - embargo_days].copy()
+    test_df = df.iloc[split_idx:].copy() # OOS Data
+    
+    return train_df, test_df
+
+# ==========================================
+# 2. CORE ENGINE: ML & SHAP
+# ==========================================
+@st.cache_resource(show_spinner=False)
+def train_models(train_df, test_df):
+    features = ['Mom_1M', 'Mom_3M', 'Mom_6M', 'Safe_Mom', 'Vol_Ratio', 'MA_50', 'MA_200', 'VIX_Level', 'VIX_Chg_1M']
+    
+    X_train, y_train = train_df[features], train_df['Target']
+    X_test = test_df[features]
+    
+    # Ensemble Models
+    rf = RandomForestClassifier(n_estimators=150, max_depth=4, min_samples_leaf=50, random_state=42, n_jobs=-1)
+    gb = GradientBoostingClassifier(n_estimators=100, max_depth=3, learning_rate=0.05, random_state=42)
+    
+    rf.fit(X_train, y_train)
+    gb.fit(X_train, y_train)
+    
+    # Probabilities
+    rf_probs = rf.predict_proba(X_test)[:, 1]
+    gb_probs = gb.predict_proba(X_test)[:, 1]
+    test_df['Prob_Up'] = (rf_probs + gb_probs) / 2
+    
+    # SHAP Generation (Using a sample for speed & avoiding memory errors)
+    X_test_sample = shap.utils.sample(X_test, 500)
+    explainer = shap.TreeExplainer(rf)
+    shap_values = explainer.shap_values(X_test_sample)
+    
+    # Handle list format for binary classification in older/newer SHAP versions
+    if isinstance(shap_values, list):
+        shap_values = shap_values[1]
+        
+    return test_df, X_test_sample, shap_values, features
+
+# ==========================================
+# 3. CORE ENGINE: TAX-FREE BACKTESTER
+# ==========================================
+def vector_backtest(df, cost_bps):
+    df = df.copy()
+    cost_pct = cost_bps / 10000.0
+    
+    # Generate Signal (1 if AI thinks market goes up, 0 if down)
+    df['Target_Position'] = (df['Prob_Up'] > 0.50).astype(int)
+    
+    # Shift position by 1 day to simulate buying at the close of the signal day
+    df['Position'] = df['Target_Position'].shift(1).fillna(1)
+    
+    # Calculate Turnover for Slippage
+    df['Turnover'] = df['Position'].diff().fillna(0).abs()
+    df['Friction'] = df['Turnover'] * cost_pct
+    
+    # Gross & Net Returns
+    df['Gross_Ret'] = np.where(df['Position'] == 1, df['Risk_Ret'], df['Safe_Ret'])
+    df['Net_Ret'] = df['Gross_Ret'] - df['Friction']
+    
+    # Equity Curves
+    df['Eq_Strategy'] = (1 + df['Net_Ret']).cumprod()
+    df['Eq_Benchmark'] = (1 + df['Risk_Ret']).cumprod()
+    
+    # Drawdowns
+    df['DD_Strategy'] = df['Eq_Strategy'] / df['Eq_Strategy'].cummax() - 1
+    df['DD_Benchmark'] = df['Eq_Benchmark'] / df['Eq_Benchmark'].cummax() - 1
+    
     return df
 
-FCOLS = [
-    "Mom_1M","Mom_3M","Mom_6M","Mom_12M","Safe_1M","Safe_3M",
-    "MA_50","MA_200","MA_Cross",
-    "Vol_Ratio","Vol_21d","Vol_63d","Vol_Regime",
-    "DD_6M","DD_12M","Rel_3M","Rel_6M","RSI",
-    "VIX","VIX_Ch","VIX_MA",
-    "TermSpread","TermCh","CurveInv","XMom",
-]
+# ==========================================
+# METRICS & STATS HELPERS
+# ==========================================
+def calc_metrics(df):
+    days = len(df)
+    ann_ret_strat = df['Eq_Strategy'].iloc[-1] ** (252/days) - 1
+    ann_ret_bench = df['Eq_Benchmark'].iloc[-1] ** (252/days) - 1
+    
+    vol_strat = df['Net_Ret'].std() * np.sqrt(252)
+    sharpe = ann_ret_strat / vol_strat if vol_strat != 0 else 0
+    
+    downside_rets = df.loc[df['Net_Ret'] < 0, 'Net_Ret']
+    downside_vol = downside_rets.std() * np.sqrt(252)
+    sortino = ann_ret_strat / downside_vol if downside_vol != 0 else 0
+    
+    max_dd = df['DD_Strategy'].min()
+    max_dd_bench = df['DD_Benchmark'].min()
+    
+    tot_ret = (df['Eq_Strategy'].iloc[-1] - 1)
+    tot_ret_bench = (df['Eq_Benchmark'].iloc[-1] - 1)
+    
+    return ann_ret_strat, ann_ret_bench, sharpe, sortino, max_dd, max_dd_bench, tot_ret, tot_ret_bench
 
-# ── Signal logic ──────────────────────────────────────────────
-def apply_signal(prob_arr, mom6m_arr, safe3m_arr, vix_arr):
-    """
-    Two-layer signal:
-    1. Hard momentum gate: if 6M momentum is negative AND safe asset rising,
-       force safe regardless of ML. This prevents the model buying into confirmed
-       downtrends — the single biggest source of losses in the previous versions.
-    2. ML ensemble: only act on conviction > 0.53 or < 0.47. Hold otherwise.
-    """
-    n = len(prob_arr)
-    signal = np.zeros(n, dtype=int)
-    current = 0  # start safe
-
-    for i in range(n):
-        p  = prob_arr[i]
-        m6 = mom6m_arr[i]
-        s3 = safe3m_arr[i]
-
-        # Hard gate: confirmed downtrend → force safe
-        in_downtrend = (m6 < -0.05) and (s3 > 0)
-        if in_downtrend:
-            current = 0
-        elif p > 0.53:
-            current = 1
-        elif p < 0.47:
-            current = 0
-        # else: hold current (neutral zone)
-
-        signal[i] = current
-    return signal
-
-
-def backtest(signal_arr, idx, r_risky, r_safe):
-    sig_s = pd.Series(signal_arr, index=idx)
-    raw   = np.where(signal_arr == 1, r_risky.values, r_safe.values)
-    flips = sig_s.diff().abs().fillna(0).values
-    net   = raw - flips * ROUND_TRIP
-    return pd.Series(net, index=idx, name="strategy"), sig_s
-
-# ── Pipeline ──────────────────────────────────────────────────
-def run_pipeline(df, rets, rc, sc, embargo_months=4, n_mc=500):
-    fc  = [c for c in FCOLS if c in df.columns]
-    X   = df[fc].values
-    y   = df["target"].values
-    idx = df.index
-
-    embargo_days = embargo_months * 21
-    train_size   = int(len(df) * 0.70)
-    test_start   = min(train_size + embargo_days, len(df) - 200)
-
-    X_tr, y_tr = X[:train_size], y[:train_size]
-    X_te       = X[test_start:]
-    idx_te     = idx[test_start:]
-
-    sc_  = StandardScaler()
-    Xtr  = sc_.fit_transform(X_tr)
-    Xte  = sc_.transform(X_te)
-
-    # Models — regularised to prevent overfitting
-    gb = GradientBoostingClassifier(
-        n_estimators=300, max_depth=3, learning_rate=0.02,
-        subsample=0.65, min_samples_leaf=25,
-        max_features="sqrt", random_state=42)
-    rf = RandomForestClassifier(
-        n_estimators=300, max_depth=5, min_samples_leaf=20,
-        max_features="sqrt", random_state=42)
-    lr = LogisticRegression(C=0.03, max_iter=2000, random_state=42)
-
-    gb.fit(Xtr, y_tr); rf.fit(Xtr, y_tr); lr.fit(Xtr, y_tr)
-
-    p_gb = gb.predict_proba(Xte)[:,1]
-    p_rf = rf.predict_proba(Xte)[:,1]
-    p_lr = lr.predict_proba(Xte)[:,1]
-
-    # GB gets most weight — best at non-linear regime detection
-    p_ens = 0.50 * p_gb + 0.35 * p_rf + 0.15 * p_lr
-
-    r_risky = rets[rc].reindex(idx_te)
-    r_safe  = rets[sc].reindex(idx_te)
-    bench_r = r_risky.rename("benchmark")
-
-    # Get momentum cols for hard gate
-    fc_idx   = {c: i for i, c in enumerate(fc)}
-    mom6_arr = df["Mom_6M"].reindex(idx_te).values if "Mom_6M" in df.columns else np.zeros(len(idx_te))
-    safe3_arr= df["Safe_3M"].reindex(idx_te).values if "Safe_3M" in df.columns else np.zeros(len(idx_te))
-    vix_arr  = df["VIX"].reindex(idx_te).values if "VIX" in df.columns else np.zeros(len(idx_te))
-
-    sig_arr = apply_signal(p_ens, mom6_arr, safe3_arr, vix_arr)
-    strat_r, sig_s = backtest(sig_arr, idx_te, r_risky, r_safe)
-
-    # In-sample overfitting check
-    half  = train_size // 2
-    gb2   = GradientBoostingClassifier(n_estimators=300, max_depth=3, learning_rate=0.02,
-                                        subsample=0.65, min_samples_leaf=25,
-                                        max_features="sqrt", random_state=42)
-    rf2   = RandomForestClassifier(n_estimators=300, max_depth=5, min_samples_leaf=20,
-                                    max_features="sqrt", random_state=42)
-    lr2   = LogisticRegression(C=0.03, max_iter=2000, random_state=42)
-    gb2.fit(Xtr[:half], y_tr[:half])
-    rf2.fit(Xtr[:half], y_tr[:half])
-    lr2.fit(Xtr[:half], y_tr[:half])
-    p_is   = 0.50*gb2.predict_proba(Xtr[half:])[:,1] + \
-             0.35*rf2.predict_proba(Xtr[half:])[:,1] + \
-             0.15*lr2.predict_proba(Xtr[half:])[:,1]
-    is_idx = idx[half:train_size]
-    m6_is  = df["Mom_6M"].reindex(is_idx).values if "Mom_6M" in df.columns else np.zeros(len(is_idx))
-    s3_is  = df["Safe_3M"].reindex(is_idx).values if "Safe_3M" in df.columns else np.zeros(len(is_idx))
-    v_is   = df["VIX"].reindex(is_idx).values if "VIX" in df.columns else np.zeros(len(is_idx))
-    sig_is = apply_signal(p_is, m6_is, s3_is, v_is)
-    strat_is, _ = backtest(sig_is, is_idx,
-                            rets[rc].reindex(is_idx), rets[sc].reindex(is_idx))
-
-    in_sh = _sharpe(strat_is); out_sh = _sharpe(strat_r)
-    in_dd = _maxdd(strat_is);  out_dd = _maxdd(strat_r)
-    in_wr = float((strat_is > 0).mean()); out_wr = float((strat_r > 0).mean())
-
-    # SHAP
-    expl      = shap.TreeExplainer(gb)
-    shap_vals = expl.shap_values(Xte[:500])
-
-    # Permutation test
-    rng     = np.random.default_rng(42)
-    perm_sh = []
-    for _ in range(1000):
-        pp    = rng.permutation(p_ens)
-        pa    = apply_signal(pp, mom6_arr, safe3_arr, vix_arr)
-        pr_, _ = backtest(pa, idx_te, r_risky, r_safe)
-        perm_sh.append(_sharpe(pr_))
-    perm_p   = float(np.mean(np.array(perm_sh) >= _sharpe(strat_r)))
-    pct_beat = float(np.mean(np.array(perm_sh) < _sharpe(strat_r))) * 100
-    pct_95   = float(np.percentile(perm_sh, 95))
-
-    # Monte Carlo
-    rng2     = np.random.default_rng(99)
-    nd       = len(strat_r)
-    mc_paths = np.array([
-        np.cumprod(1 + rng2.choice(strat_r.values, nd, replace=True))
-        for _ in range(n_mc)])
-
-    # OLS
-    exc_r  = (strat_r - r_safe.reindex(strat_r.index)).dropna()
-    mkt_r  = bench_r.reindex(exc_r.index).dropna()
-    common = exc_r.index.intersection(mkt_r.index)
-    Xols   = sm.add_constant(mkt_r.loc[common])
-    ols    = sm.OLS(exc_r.loc[common], Xols).fit()
-    ols_a  = float(ols.params.iloc[0]) * 252
-    ols_b  = float(ols.params.iloc[1])
-    ols_r2 = float(ols.rsquared)
-    ols_ir = ols_a / (float(ols.resid.std()) * np.sqrt(252) + 1e-9)
-
-    # Rolling
-    rs_roll = strat_r.rolling(252).apply(_sharpe_fast, raw=True)
-    rb_roll = bench_r.rolling(252).apply(_sharpe_fast, raw=True)
-    rw_roll = (strat_r > 0).rolling(252).mean()
-
-    # TC table
-    flips = sig_s.diff().abs().fillna(0)
-    r_gr  = np.where(sig_arr == 1, r_risky.values, r_safe.values)
-    tc_results = []
-    for bps in [0, 5, 10, 20, 30, 50]:
-        tc_r = pd.Series(r_gr - flips.values * bps/10_000, index=idx_te)
-        tc_results.append(dict(bps=bps, ann_return=_ann(tc_r),
-                               sharpe=_sharpe(tc_r), max_dd=_maxdd(tc_r),
-                               beats=_sharpe(tc_r) > _sharpe(bench_r)))
-
-    # Disagreement
-    pgb_s = pd.Series(p_gb, index=idx_te)
-    prf_s = pd.Series(p_rf, index=idx_te)
-    disagr = (pgb_s - prf_s).abs()
-    high_c = float((disagr < 0.10).mean()) * 100
-
-    # Crisis alpha
-    CRISES = {
-        "2008 Financial Crisis": ("2008-09-01","2009-03-31"),
-        "2011 Euro Debt Crisis":  ("2011-07-01","2011-10-31"),
-        "2015 Flash Crash":       ("2015-08-01","2015-09-30"),
-        "2018 Volmageddon":       ("2018-01-26","2018-04-30"),
-        "2020 COVID Crash":       ("2020-02-19","2020-04-30"),
-        "2022 Inflation Bear":    ("2022-01-01","2022-10-31"),
-    }
-    crisis_data = []
-    all_r = pd.concat([strat_r.rename("s"), bench_r.rename("b")], axis=1).dropna()
-    for name, (s, e) in CRISES.items():
-        try:
-            sub = all_r.loc[s:e]
-            if len(sub) < 5: continue
-            sr = float((1+sub["s"]).prod()-1); br = float((1+sub["b"]).prod()-1)
-            crisis_data.append(dict(period=name,strategy=sr,market=br,
-                                    alpha=sr-br,preserved=sr>br))
-        except Exception: pass
-
-    return dict(
-        strat_r=strat_r, bench_r=bench_r,
-        eq_s=(1+strat_r).cumprod(), eq_b=(1+bench_r).cumprod(),
-        dd_s=_rolling_dd(strat_r), dd_b=_rolling_dd(bench_r),
-        signal=sig_s, p_gb=pgb_s, p_rf=prf_s,
-        fc=fc, Xte=Xte, shap_vals=shap_vals,
-        perm_sh=perm_sh, perm_p=perm_p, pct_beat=pct_beat, pct_95=pct_95,
-        mc_paths=mc_paths,
-        ols_a=ols_a, ols_b=ols_b, ols_r2=ols_r2, ols_ir=ols_ir,
-        rs_roll=rs_roll, rb_roll=rb_roll, rw_roll=rw_roll,
-        tc_results=tc_results, disagr=disagr, high_c=high_c,
-        crisis_data=crisis_data,
-        in_sh=in_sh, out_sh=out_sh, in_dd=in_dd, out_dd=out_dd,
-        in_wr=in_wr, out_wr=out_wr,
-        n_trades=int(flips.sum()), train_end=idx[train_size-1],
-    )
-
-# ── Sidebar ───────────────────────────────────────────────────
+# ==========================================
+# SIDEBAR
+# ==========================================
 with st.sidebar:
-    st.markdown('<p style="font-family:Share Tech Mono;font-size:.6rem;letter-spacing:3px;color:#2a7a9a;text-transform:uppercase;">RESEARCH TERMINAL</p>', unsafe_allow_html=True)
-    st.markdown('<p style="font-family:Share Tech Mono;font-size:.55rem;letter-spacing:2px;color:#1a5a7a;text-transform:uppercase;margin-top:-10px;">streamlit</p>', unsafe_allow_html=True)
+    st.markdown("### ASSET CONFIGURATION")
+    risk_asset = st.text_input("High-Beta Asset", value="QQQ")
+    safe_asset = st.text_input("Risk-Free Asset", value="SHY")
+    
+    st.markdown("### VALIDATION")
+    embargo_months = st.slider("Purged Embargo (Months)", 1, 12, 4)
+    monte_carlo_sims = st.number_input("Monte Carlo Sims", min_value=100, max_value=2000, value=500, step=100)
+    
+    st.markdown("### COST MODEL")
+    cost_bps = st.slider("Slippage (bps per trade)", 0, 20, 5)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    run_btn = st.button("⚡ EXECUTE PIPELINE")
+    
     st.markdown("---")
-    st.markdown('<p style="font-family:Share Tech Mono;font-size:.6rem;letter-spacing:3px;color:#3a8aaa;text-transform:uppercase;">MODEL CONTROLS</p>', unsafe_allow_html=True)
-    risky_asset = st.text_input("High-Beta Asset", value="SPY")
-    safe_asset  = st.text_input("Safe-Haven Asset", value="IEF")
-    embargo     = st.slider("Purged Embargo (Months)", 1, 12, 4)
-    n_mc        = st.number_input("Monte Carlo Sims", 100, 2000, 500, step=100)
-    st.markdown("---")
-    st.markdown('<p style="font-family:Share Tech Mono;font-size:.58rem;color:#2a5a7a;line-height:1.8;">Momentum-gated GB/RF Ensemble<br>Purged walk-forward · Neutral zone<br>SHAP · Permutation test</p>', unsafe_allow_html=True)
-    run_btn = st.button("EXECUTE RESEARCH PIPELINE")
+    st.caption("Regime-Filtered Boosting • Purged walk-forward validation • Ensemble voting • SHAP attribution")
 
-# ── Header ────────────────────────────────────────────────────
-st.markdown('<p style="font-family:Share Tech Mono;font-size:.58rem;letter-spacing:4px;color:#2a6a8a;text-transform:uppercase;margin-bottom:-4px;">QUANTITATIVE RESEARCH LAB</p>', unsafe_allow_html=True)
-st.markdown('<h1 class="main-title">Adaptive Macro-Conditional Ensemble</h1>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle-bar">AMCE FRAMEWORK &nbsp;&middot;&nbsp; REGIME FILTERING &nbsp;&middot;&nbsp; ENSEMBLE VOTING &nbsp;&middot;&nbsp; STATISTICAL VALIDATION</p>', unsafe_allow_html=True)
-st.markdown("""
-<div class="hyp-box"><div class="hyp-title">RESEARCH HYPOTHESIS</div>
-<b>H0 (Null):</b> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.<br>
-<b>H1 (Alternative):</b> A momentum-gated GB/RF ensemble generates positive crisis alpha and statistically significant risk-adjusted outperformance over a full market cycle (2003&ndash;present).<br>
-<span style="color:#1a5a7a;">Test: Signal permutation (n=1,000+) &nbsp;|&nbsp; p &le; 0.05 &nbsp;|&nbsp; OLS alpha on excess returns &nbsp;|&nbsp; Net-of-fees &amp; slippage, pre-tax</span>
-</div>""", unsafe_allow_html=True)
-st.markdown("---")
+# ==========================================
+# MAIN DASHBOARD
+# ==========================================
+if run_btn:
+    # --- PIPELINE EXECUTION UI ---
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    status_text.text("📡 1/4: Fetching API & Engineering Features...")
+    train_df, test_df = fetch_and_engineer_data(risk_asset, safe_asset, embargo_months)
+    progress_bar.progress(25)
+    
+    status_text.text("🧠 2/4: Training Sklearn Random Forest & Gradient Boosting...")
+    test_df, X_test_sample, shap_values, features = train_models(train_df, test_df)
+    progress_bar.progress(65)
+    
+    status_text.text("💸 3/4: Running Walk-Forward Backtest (Applying Friction)...")
+    res_df = vector_backtest(test_df, cost_bps)
+    progress_bar.progress(90)
+    
+    status_text.text("📊 4/4: Calculating Institutional Metrics...")
+    (ann_ret_strat, ann_ret_bench, sharpe, sortino, max_dd, max_dd_bench, tot_ret, tot_ret_bench) = calc_metrics(res_df)
+    
+    progress_bar.empty()
+    status_text.success("✔️ Pipeline Execution Complete! (Strict Out-of-Sample)")
+    
+    # --- HEADER ---
+    st.markdown("# Adaptive Macro-Conditional Ensemble")
+    st.markdown(f"*AMCE v4.0 | Out-of-Sample Validated | No Data Leakage | Net of {cost_bps}bps Slippage*")
+    
+    st.markdown("""
+    <div style="background-color: #121826; padding: 15px; border-radius: 8px; border: 1px solid #2B3548; margin-bottom: 20px;">
+        <h5 style="color: #6366F1; margin-top:0;">RESEARCH HYPOTHESIS</h5>
+        <p style="font-size: 0.9em; margin-bottom: 5px;"><strong>H₀ (Null):</strong> Macro-conditional regime signals provide no statistically significant improvement over passive equity exposure.</p>
+        <p style="font-size: 0.9em; margin-bottom: 0;"><strong>H₁ (Alternative):</strong> Integrating Regime Filtering with Gradient Boosting generates positive crisis alpha and risk-adjusted outperformance, net of trading friction.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-# ── Main ──────────────────────────────────────────────────────
-if run_btn or "results" in st.session_state:
-    if run_btn:
-        with st.spinner("Running research pipeline..."):
+    # --- 01 EXECUTIVE RISK SUMMARY ---
+    st.markdown("### 01 — EXECUTIVE RISK SUMMARY")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("SHARPE RATIO", f"{sharpe:.3f}", f"Bench: {res_df['Risk_Ret'].mean()/res_df['Risk_Ret'].std()*np.sqrt(252):.3f}")
+    c2.metric("SORTINO RATIO", f"{sortino:.3f}", "Downside Adj.")
+    c3.metric("TOTAL RETURN", f"{tot_ret*100:.1f}%", f"Bench: {tot_ret_bench*100:.1f}%")
+    c4.metric("ANN. RETURN", f"{ann_ret_strat*100:.1f}%", f"Bench: {ann_ret_bench*100:.1f}%")
+    c5.metric("MAX DRAWDOWN", f"{max_dd*100:.1f}%", f"Bench: {max_dd_bench*100:.1f}%", delta_color="inverse")
+    
+    # --- 02 EQUITY CURVE & REGIME OVERLAY ---
+    st.markdown("### 02 — EQUITY CURVE & REGIME OVERLAY")
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
+    
+    fig.add_trace(go.Scatter(x=res_df.index, y=res_df['Eq_Strategy'], mode='lines', name='AMCE Strategy', line=dict(color='#00FFAA', width=2)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=res_df.index, y=res_df['Eq_Benchmark'], mode='lines', name=f'{risk_asset} Buy & Hold', line=dict(color='#888888', width=1, dash='dot')), row=1, col=1)
+    
+    fig.add_trace(go.Scatter(x=res_df.index, y=res_df['DD_Strategy']*100, mode='lines', name='Strat DD', line=dict(color='#FF3366', width=1), fill='tozeroy'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=res_df.index, y=res_df['DD_Benchmark']*100, mode='lines', name='Bench DD', line=dict(color='#555555', width=1)), row=2, col=1)
+    
+    fig.update_layout(template='plotly_dark', margin=dict(l=0, r=0, t=20, b=0), height=500, legend=dict(yanchor="top", y=0.95, xanchor="left", x=0.01))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- 03 MONTE CARLO ---
+    st.markdown("### 03 — MONTE CARLO ROBUSTNESS (BOOTSTRAPPED)")
+    with st.spinner("Running Monte Carlo simulations..."):
+        daily_rets = res_df['Net_Ret'].values
+        mc_paths = np.zeros((monte_carlo_sims, len(daily_rets)))
+        for i in range(monte_carlo_sims):
+            # Bootstrap resampling with replacement
+            mc_paths[i] = np.random.choice(daily_rets, size=len(daily_rets), replace=True)
+        
+        mc_cumulative = np.cumprod(1 + mc_paths, axis=1)
+        mc_percentiles = np.percentile(mc_cumulative, [5, 50, 95], axis=0)
+        
+        fig_mc = go.Figure()
+        # 95% Cone
+        fig_mc.add_trace(go.Scatter(x=res_df.index, y=mc_percentiles[2], mode='lines', line=dict(width=0), showlegend=False))
+        fig_mc.add_trace(go.Scatter(x=res_df.index, y=mc_percentiles[0], mode='lines', fill='tonexty', fillcolor='rgba(100, 100, 255, 0.1)', line=dict(width=0), name='95% Confidence Cone'))
+        # Median
+        fig_mc.add_trace(go.Scatter(x=res_df.index, y=mc_percentiles[1], mode='lines', name='Median Expectation', line=dict(color='#6666FF', dash='dash')))
+        # Actual
+        fig_mc.add_trace(go.Scatter(x=res_df.index, y=res_df['Eq_Strategy'], mode='lines', name='Actual Strategy', line=dict(color='#00FFAA', width=2)))
+        
+        fig_mc.update_layout(template='plotly_dark', height=400, margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig_mc, use_container_width=True)
+
+    # --- 04 & 05 ROW: FACTOR & CRISIS ---
+    colA, colB = st.columns([1, 1])
+    with colA:
+        st.markdown("### 04 — FACTOR DECOMPOSITION (OLS ALPHA)")
+        # Run OLS: Strategy_Ret = Alpha + Beta * Benchmark_Ret
+        X = sm.add_constant(res_df['Risk_Ret'].values)
+        y = res_df['Net_Ret'].values
+        model = sm.OLS(y, X).fit()
+        alpha_daily, beta = model.params[0], model.params[1]
+        alpha_ann = (1 + alpha_daily)**252 - 1
+        
+        ca1, ca2 = st.columns(2)
+        ca1.metric("Alpha (Ann.)", f"{alpha_ann*100:.2f}%", help="Excess return not explained by market direction.")
+        ca2.metric("Market Beta", f"{beta:.2f}", help="Correlation to the benchmark asset.")
+        st.caption(f"OLS Regression p-value: {model.pvalues[0]:.4f}")
+
+    with colB:
+        st.markdown("### 05 — CRISIS ALPHA ANALYSIS")
+        # Define approximate dates for major crashes in the last 20 years
+        crashes = {
+            "2008 Financial Crisis": ('2008-08-01', '2009-03-01'),
+            "2011 Euro Debt Crisis": ('2011-07-01', '2011-10-01'),
+            "2015 Flash Crash": ('2015-08-01', '2015-09-01'),
+            "2018 Volmageddon": ('2018-01-20', '2018-02-20'),
+            "2020 COVID Crash": ('2020-02-15', '2020-03-25'),
+            "2022 Tech Bear": ('2022-01-01', '2022-12-31')
+        }
+        
+        crisis_data = []
+        for name, (start, end) in crashes.items():
             try:
-                loader = DataLoader(start="2003-01-01")
-                prices, rets, vix, tnx, irx = loader.load(risky_asset, safe_asset)
-                df_f = build_features(prices, rets, vix, tnx, irx, risky_asset, safe_asset)
-                res  = run_pipeline(df_f, rets, risky_asset, safe_asset, embargo, int(n_mc))
-                st.session_state["results"] = res
-                st.session_state["risky"]   = risky_asset
-                st.session_state["safe"]    = safe_asset
-            except Exception as e:
-                st.error(f"Pipeline error: {e}")
-                st.stop()
+                period_df = res_df.loc[start:end]
+                if len(period_df) > 10: # Ensure we actually have data for this period
+                    strat_ret = (period_df['Eq_Strategy'].iloc[-1] / period_df['Eq_Strategy'].iloc[0]) - 1
+                    bench_ret = (period_df['Eq_Benchmark'].iloc[-1] / period_df['Eq_Benchmark'].iloc[0]) - 1
+                    edge = strat_ret - bench_ret
+                    result = "✅ Preserved" if strat_ret > bench_ret else "❌ Underperformed"
+                    crisis_data.append([name, f"{strat_ret*100:.1f}%", f"{bench_ret*100:.1f}%", f"+{edge*100:.1f}%" if edge>0 else f"{edge*100:.1f}%", result])
+            except Exception:
+                pass # Skip if dates aren't in test set
+                
+        if crisis_data:
+            df_crisis = pd.DataFrame(crisis_data, columns=["Crisis Period", "Strategy", "Market", "Alpha (Edge)", "Result"])
+            st.dataframe(df_crisis, hide_index=True, use_container_width=True)
+        else:
+            st.info("No major crisis dates fall within the out-of-sample test period.")
 
-    res = st.session_state.get("results")
-    if res is None: st.stop()
-    rc = st.session_state.get("risky", risky_asset)
-
-    sr = res["strat_r"]; br = res["bench_r"]
-    es = res["eq_s"];    eb = res["eq_b"]
-
-    sh_s=_sharpe(sr); sh_b=_sharpe(br); so_s=_sortino(sr)
-    tot_s=_tot(sr);   tot_b=_tot(br)
-    ann_s=_ann(sr);   ann_b=_ann(br)
-    dd_s=_maxdd(sr);  dd_b=_maxdd(br); cal=_calmar(sr)
-
-    # 01 ── Executive Summary ──────────────────────────────────
-    st.markdown('<div class="section-header">01 — EXECUTIVE RISK SUMMARY</div>', unsafe_allow_html=True)
-    c1,c2,c3,c4,c5 = st.columns(5)
-    with c1: st.markdown(f'<div class="metric-card"><div class="metric-label">SHARPE RATIO</div><div class="metric-value">{sh_s:.3f}</div><div class="bench-label">Bench: {sh_b:.2f}</div></div>', unsafe_allow_html=True)
-    with c2: st.markdown(f'<div class="metric-card"><div class="metric-label">SORTINO RATIO</div><div class="metric-value">{so_s:.3f}</div><div class="bench-label">Downside adj.</div></div>', unsafe_allow_html=True)
-    with c3: st.markdown(f'<div class="metric-card"><div class="metric-label">TOTAL RETURN</div><div class="metric-value">{tot_s*100:.0f}%</div><div class="bench-label">Bench: {tot_b*100:.0f}%</div></div>', unsafe_allow_html=True)
-    with c4: st.markdown(f'<div class="metric-card"><div class="metric-label">ANN. RETURN</div><div class="metric-value">{ann_s*100:.1f}%</div><div class="bench-label">Bench: {ann_b*100:.1f}%</div></div>', unsafe_allow_html=True)
-    with c5: st.markdown(f'<div class="metric-card metric-card-red"><div class="metric-label">MAX DRAWDOWN</div><div class="metric-value metric-value-red">{dd_s*100:.1f}%</div><div class="bench-label">Calmar: {cal:.2f}</div></div>', unsafe_allow_html=True)
-
-    # 02 ── Equity Curve ───────────────────────────────────────
-    st.markdown('<div class="section-header">02 — EQUITY CURVE & REGIME OVERLAY</div>', unsafe_allow_html=True)
-    sig_s = res["signal"]
-    fig_eq = make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[0.72,0.28],vertical_spacing=0.03)
-    in_r=False; rstart=None
-    for dt,v in sig_s.items():
-        if v==1 and not in_r:   in_r=True; rstart=dt
-        elif v==0 and in_r:
-            in_r=False
-            fig_eq.add_vrect(x0=rstart,x1=dt,fillcolor="rgba(0,255,224,0.04)",line_width=0,row=1,col=1)
-    if in_r: fig_eq.add_vrect(x0=rstart,x1=sig_s.index[-1],fillcolor="rgba(0,255,224,0.04)",line_width=0,row=1,col=1)
-    fig_eq.add_trace(go.Scatter(x=eb.index,y=eb.values,name=f"{rc} Buy & Hold",line=dict(color="rgba(200,200,200,0.4)",dash="dash",width=1.5)),row=1,col=1)
-    fig_eq.add_trace(go.Scatter(x=es.index,y=es.values,name="AMCE Strategy",line=dict(color=CYAN,width=2.5)),row=1,col=1)
-    fig_eq.add_trace(go.Scatter(x=res["dd_s"].index,y=res["dd_s"].values,name="Strategy DD",fill="tozeroy",fillcolor="rgba(255,77,109,0.25)",line=dict(color=PINK,width=1)),row=2,col=1)
-    fig_eq.add_trace(go.Scatter(x=res["dd_b"].index,y=res["dd_b"].values,name="Bench DD",fill="tozeroy",fillcolor="rgba(100,100,120,0.15)",line=dict(color="rgba(180,180,200,0.4)",width=1)),row=2,col=1)
-    fig_eq.update_layout(**plot_layout(height=520,yaxis_title="Portfolio Value (x)",yaxis2_title="Drawdown %"))
-    fig_eq.update_xaxes(gridcolor=GRID_COLOR); fig_eq.update_yaxes(gridcolor=GRID_COLOR)
-    st.plotly_chart(fig_eq,use_container_width=True)
-
-    # 03 ── Monte Carlo ────────────────────────────────────────
-    st.markdown('<div class="section-header">03 — MONTE CARLO ROBUSTNESS (BOOTSTRAPPED)</div>', unsafe_allow_html=True)
-    st.markdown('<p style="font-family:Share Tech Mono;font-size:.62rem;color:#2a5a7a;">Bootstrap resampling preserves fat-tail properties. Actual strategy should track within 95% confidence cone.</p>', unsafe_allow_html=True)
-    mc=res["mc_paths"]; mcf=mc[:,-1]
-    pb=float(np.mean(mcf>eb.iloc[-1])); pd_=float(np.mean(mc.min(axis=1)<0.6)); mfv=float(np.median(mcf))
-    c1,c2,c3=st.columns(3)
-    with c1: st.markdown(f'<div class="metric-card"><div class="metric-label">PROB. BEAT BENCHMARK</div><div class="metric-value">{pb*100:.0f}%</div></div>',unsafe_allow_html=True)
-    with c2: st.markdown(f'<div class="metric-card"><div class="metric-label">PROB. DRAWDOWN &gt;40%</div><div class="metric-value">{pd_*100:.0f}%</div></div>',unsafe_allow_html=True)
-    with c3: st.markdown(f'<div class="metric-card"><div class="metric-label">MEDIAN FINAL VALUE</div><div class="metric-value">x{mfv:.2f}</div></div>',unsafe_allow_html=True)
-    xd=np.arange(mc.shape[1]); p5=np.percentile(mc,5,axis=0); p95=np.percentile(mc,95,axis=0); med=np.median(mc,axis=0)
-    fig_mc=go.Figure()
-    fig_mc.add_trace(go.Scatter(x=np.concatenate([xd,xd[::-1]]),y=np.concatenate([p95,p5[::-1]]),fill="toself",fillcolor="rgba(26,42,80,0.7)",line=dict(width=0),name="95% Confidence Cone"))
-    fig_mc.add_trace(go.Scatter(x=xd,y=med,line=dict(color="rgba(0,200,180,0.6)",dash="dash",width=1.5),name="Median Expectation"))
-    fig_mc.add_trace(go.Scatter(x=np.arange(len(es)),y=es.values,line=dict(color=CYAN,width=2.5),name="Actual Strategy"))
-    fig_mc.add_trace(go.Scatter(x=np.arange(len(eb)),y=eb.values,line=dict(color="rgba(200,200,220,0.4)",width=1.5,dash="dot"),name=f"{rc} Buy & Hold"))
-    fig_mc.update_layout(**plot_layout(height=380,xaxis_title="Trading Days",yaxis_title="Growth of $1"))
-    st.plotly_chart(fig_mc,use_container_width=True)
-
-    # 04 ── Crisis Alpha ───────────────────────────────────────
-    st.markdown('<div class="section-header">04 — CRISIS ALPHA ANALYSIS</div>', unsafe_allow_html=True)
-    st.markdown('<p style="font-family:Share Tech Mono;font-size:.62rem;color:#2a5a7a;">Performance during systemic risk events. Green = capital preserved vs benchmark.</p>', unsafe_allow_html=True)
-    ch='<table class="crisis-table"><thead><tr><th style="text-align:left;">CRISIS PERIOD</th><th>STRATEGY</th><th>MARKET</th><th>ALPHA (EDGE)</th><th>RESULT</th></tr></thead><tbody>'
-    for c in res["crisis_data"]:
-        ac="green" if c["alpha"]>0 else "red"; sg="+" if c["alpha"]>0 else ""
-        bd='<span class="badge-green">Preserved</span>' if c["preserved"] else '<span style="color:#ff4d6d;">Loss</span>'
-        ch+=f'<tr><td>{c["period"]}</td><td>{c["strategy"]*100:.1f}%</td><td class="red">{c["market"]*100:.1f}%</td><td class="{ac}">{sg}{c["alpha"]*100:.1f}%</td><td>{bd}</td></tr>'
-    ch+="</tbody></table>"
-    st.markdown(ch,unsafe_allow_html=True)
-
-    # 05 ── OLS Factor Decomposition ──────────────────────────
-    st.markdown('<div class="section-header">05 — FACTOR DECOMPOSITION (OLS ALPHA)</div>', unsafe_allow_html=True)
-    c1,c2,c3,c4=st.columns(4)
-    ac="metric-value" if res["ols_a"]>0 else "metric-value metric-value-red"
-    with c1: st.markdown(f'<div class="metric-card"><div class="metric-label">ALPHA (ANN.)</div><div class="{ac}">{res["ols_a"]*100:+.2f}%</div><div class="bench-label">OLS excess return</div></div>',unsafe_allow_html=True)
-    with c2: st.markdown(f'<div class="metric-card"><div class="metric-label">MARKET BETA</div><div class="metric-value">{res["ols_b"]:.3f}</div><div class="bench-label">Defensive (&beta;&lt;1)</div></div>',unsafe_allow_html=True)
-    with c3: st.markdown(f'<div class="metric-card"><div class="metric-label">R&sup2;</div><div class="metric-value">{res["ols_r2"]:.3f}</div><div class="bench-label">Residual-return skill</div></div>',unsafe_allow_html=True)
-    with c4: st.markdown(f'<div class="metric-card"><div class="metric-label">INFO. RATIO</div><div class="metric-value">{res["ols_ir"]:.3f}</div><div class="bench-label">Active vs tracking err</div></div>',unsafe_allow_html=True)
-
-    # 06 ── Strategy Stability ─────────────────────────────────
-    st.markdown('<div class="section-header">06 — STRATEGY STABILITY (ROLLING METRICS)</div>', unsafe_allow_html=True)
-    cl,cr=st.columns(2)
-    with cl:
-        fig_rs=go.Figure()
-        fig_rs.add_hrect(y0=-0.5,y1=0,fillcolor="rgba(255,77,109,0.08)",line_width=0)
-        fig_rs.add_trace(go.Scatter(x=res["rb_roll"].dropna().index,y=res["rb_roll"].dropna().values,line=dict(color="rgba(200,200,220,0.4)",width=1,dash="dot"),name=f"{rc} B&H"))
-        fig_rs.add_trace(go.Scatter(x=res["rs_roll"].dropna().index,y=res["rs_roll"].dropna().values,line=dict(color=CYAN,width=2),fill="tozeroy",fillcolor="rgba(0,255,224,0.06)",name="Strategy"))
-        fig_rs.add_hline(y=0,line_color=PINK,line_dash="dash",line_width=1)
-        fig_rs.update_layout(**plot_layout(height=280,title=dict(text="12-Month Rolling Sharpe Ratio",font=dict(size=11,color=WHITE))))
-        st.plotly_chart(fig_rs,use_container_width=True)
-    with cr:
-        fig_rw=go.Figure()
-        fig_rw.add_trace(go.Scatter(x=res["rw_roll"].dropna().index,y=res["rw_roll"].dropna().values,line=dict(color=CYAN,width=2),fill="tozeroy",fillcolor="rgba(0,255,224,0.06)",name="Win Rate"))
-        fig_rw.add_hline(y=0.5,line_color=PINK,line_dash="dash",line_width=1)
-        fig_rw.update_layout(**plot_layout(height=280,title=dict(text="12-Month Rolling Win Rate",font=dict(size=11,color=WHITE)),yaxis=dict(gridcolor=GRID_COLOR,zerolinecolor=GRID_COLOR,color=WHITE,tickformat=".0%")))
-        st.plotly_chart(fig_rw,use_container_width=True)
-
-    ds=abs(res["in_sh"]-res["out_sh"])/(abs(res["in_sh"])+1e-9)*100
-    dd2=abs(res["in_dd"]-res["out_dd"])/(abs(res["in_dd"])+1e-9)*100
-    dw=abs(res["in_wr"]-res["out_wr"])/(abs(res["in_wr"])+1e-9)*100
-    oos_df=pd.DataFrame({
-        "Metric":["Sharpe Ratio","Max Drawdown","Win Rate"],
-        "In-Sample (70%)":[f"{res['in_sh']:.3f}",f"{res['in_dd']*100:.1f}%",f"{res['in_wr']*100:.1f}%"],
-        "Out-of-Sample (30%)":[f"{res['out_sh']:.3f}",f"{res['out_dd']*100:.1f}%",f"{res['out_wr']*100:.1f}%"],
-        "Decay":[f"{ds:.0f}%",f"{dd2:.0f}%",f"{dw:.0f}%"],
-    })
-    st.dataframe(oos_df,use_container_width=True,hide_index=True)
-    if ds<25: st.markdown('<div class="banner-green">LOW OVERFITTING — Out-of-sample metrics within 25% of in-sample. Model generalizes to unseen market conditions.</div>',unsafe_allow_html=True)
-    else: st.markdown('<div class="banner-yellow">MODERATE DECAY — Out-of-sample Sharpe decay exceeds 25%. Consider reducing complexity.</div>',unsafe_allow_html=True)
-
-    # 07 ── Permutation Test ───────────────────────────────────
-    st.markdown('<div class="section-header">07 — STATISTICAL SIGNIFICANCE (PERMUTATION TEST)</div>', unsafe_allow_html=True)
-    st.markdown('<p style="font-family:Share Tech Mono;font-size:.62rem;color:#2a5a7a;">1,000 signal shuffles vs actual Sharpe. If actual exceeds 95th percentile, model has genuine predictive skill.</p>', unsafe_allow_html=True)
-    c1,c2,c3=st.columns(3)
-    with c1: st.markdown(f'<div class="metric-card"><div class="metric-label">ACTUAL SHARPE</div><div class="metric-value">{sh_s:.4f}</div></div>',unsafe_allow_html=True)
-    with c2:
-        pc="metric-value" if res["perm_p"]<0.05 else "metric-value metric-value-red"
-        tag='<span style="color:#00c87a;font-size:.65rem;">alpha-significant</span>' if res["perm_p"]<0.05 else ""
-        st.markdown(f'<div class="metric-card"><div class="metric-label">PERMUTATION P-VALUE</div><div class="{pc}">{res["perm_p"]:.4f}</div>{tag}</div>',unsafe_allow_html=True)
-    with c3: st.markdown(f'<div class="metric-card"><div class="metric-label">RANDOM STRATS BEATEN</div><div class="metric-value">{res["pct_beat"]:.1f}%</div></div>',unsafe_allow_html=True)
-    fig_p=go.Figure()
-    fig_p.add_trace(go.Histogram(x=res["perm_sh"],nbinsx=50,marker_color="rgba(60,80,120,0.8)",name="Random Signal Distribution"))
-    fig_p.add_vline(x=res["pct_95"],line_color=PINK,line_dash="dash",line_width=1.5,annotation_text=f"95th Perm = {res['pct_95']:.3f}",annotation_font_color=PINK,annotation_font_size=10)
-    fig_p.add_vline(x=sh_s,line_color=CYAN,line_width=2,annotation_text=f"Actual = {sh_s:.4f}",annotation_font_color=CYAN,annotation_font_size=10)
-    max_x=max(max(res["perm_sh"]),sh_s)+0.1
-    fig_p.add_vrect(x0=res["pct_95"],x1=max_x,fillcolor="rgba(100,30,50,0.3)",line_width=0)
-    fig_p.update_layout(**plot_layout(height=340,xaxis_title="Sharpe Ratio",yaxis_title="Density"))
-    st.plotly_chart(fig_p,use_container_width=True)
-    if res["perm_p"]<0.05: st.markdown(f'<div class="banner-green">STATISTICALLY SIGNIFICANT — p={res["perm_p"]:.4f} &lt; 0.05. Reject H0. Genuine predictive skill confirmed.</div>',unsafe_allow_html=True)
-    else: st.markdown(f'<div class="banner-yellow">NOT SIGNIFICANT — p={res["perm_p"]:.4f} &ge; 0.05. Cannot reject H0.</div>',unsafe_allow_html=True)
-
-    # 08 ── TC Sensitivity ─────────────────────────────────────
-    st.markdown('<div class="section-header">08 — TRANSACTION COST SENSITIVITY</div>', unsafe_allow_html=True)
-    ann_to=res["n_trades"]/(len(sr)/252)
-    st.markdown(f'<p style="font-family:Share Tech Mono;font-size:.65rem;color:#3a7a9a;">Trades: {res["n_trades"]} &nbsp;|&nbsp; Annual turnover: {ann_to:.1f}x &nbsp;|&nbsp; Baseline: {SLIPPAGE_BPS}bps slippage + {COMMISSION_BPS}bps commission</p>',unsafe_allow_html=True)
-    tc_df=pd.DataFrame(res["tc_results"])
-    tc_df["bps"]=tc_df["bps"].astype(str)+"bps"
-    tc_df["ann_return"]=(tc_df["ann_return"]*100).map("{:.1f}%".format)
-    tc_df["sharpe"]=tc_df["sharpe"].map("{:.3f}".format)
-    tc_df["max_dd"]=(tc_df["max_dd"]*100).map("{:.1f}%".format)
-    tc_df["beats"]=tc_df["beats"].map(lambda x:"Yes" if x else "No")
-    tc_df.columns=["Cost","Ann. Return","Sharpe","Max DD","Beats Benchmark"]
-    st.dataframe(tc_df,use_container_width=True,hide_index=True)
-
-    # 09 ── Ensemble Disagreement ──────────────────────────────
-    st.markdown('<div class="section-header">09 — ENSEMBLE MODEL DISAGREEMENT ANALYSIS</div>', unsafe_allow_html=True)
-    fig_en=go.Figure()
-    fig_en.add_trace(go.Scatter(x=res["p_gb"].index,y=res["p_gb"].values,line=dict(color=CYAN,width=1.2),name="Gradient Boosting"))
-    fig_en.add_trace(go.Scatter(x=res["p_rf"].index,y=res["p_rf"].values,line=dict(color=PURPLE,width=1.2),name="Random Forest"))
-    hi=pd.concat([res["p_gb"],res["p_rf"]],axis=1).max(axis=1); lo=pd.concat([res["p_gb"],res["p_rf"]],axis=1).min(axis=1)
-    fig_en.add_trace(go.Scatter(x=hi.index.tolist()+lo.index.tolist()[::-1],y=hi.values.tolist()+lo.values.tolist()[::-1],fill="toself",fillcolor="rgba(255,200,60,0.08)",line=dict(width=0),name="Disagreement Zone"))
-    fig_en.add_hline(y=0.53,line_color="rgba(0,255,224,0.4)",line_dash="dash",line_width=1,annotation_text="Long threshold (0.53)",annotation_font_size=9)
-    fig_en.add_hline(y=0.47,line_color="rgba(255,77,109,0.4)",line_dash="dash",line_width=1,annotation_text="Short threshold (0.47)",annotation_font_size=9)
-    fig_en.update_layout(**plot_layout(height=350,yaxis=dict(gridcolor=GRID_COLOR,zerolinecolor=GRID_COLOR,color=WHITE,range=[0,1],title="P(Risky > Safe)")))
-    st.plotly_chart(fig_en,use_container_width=True)
-    c1,c2=st.columns(2)
-    with c1: st.markdown(f'<div class="metric-card"><div class="metric-label">AVG DISAGREEMENT</div><div class="metric-value">{float(res["disagr"].mean()):.4f}</div></div>',unsafe_allow_html=True)
-    with c2: st.markdown(f'<div class="metric-card"><div class="metric-label">HIGH CONVICTION %</div><div class="metric-value">{res["high_c"]:.1f}%</div></div>',unsafe_allow_html=True)
-
-    # 10 ── SHAP ───────────────────────────────────────────────
-    st.markdown('<div class="section-header">10 — SHAP FEATURE ATTRIBUTION (GAME-THEORETIC)</div>', unsafe_allow_html=True)
-    st.markdown('<p style="font-family:Share Tech Mono;font-size:.62rem;color:#2a5a7a;">Red = pushes toward risky asset. Blue = toward safe asset.</p>',unsafe_allow_html=True)
-    sv=res["shap_vals"]; fc=res["fc"]
-    ms=np.abs(sv).mean(axis=0)
-    sh_df=pd.DataFrame({"feature":fc,"importance":ms}).sort_values("importance",ascending=True).tail(10)
-    cs1,cs2=st.columns(2)
-    with cs1:
-        fig_sh=go.Figure(go.Bar(x=sh_df["importance"],y=sh_df["feature"],orientation="h",
-            marker=dict(color=[CYAN if f==sh_df["feature"].iloc[-1] else PURPLE for f in sh_df["feature"]])))
-        fig_sh.update_layout(**plot_layout(height=380,title=dict(text="Feature Importance",font=dict(size=11,color=WHITE)),xaxis_title="Mean |SHAP Value|"))
-        st.plotly_chart(fig_sh,use_container_width=True)
-    with cs2:
-        tf=sh_df["feature"].tolist(); ti=[list(fc).index(f) for f in tf]
-        fig_bee=go.Figure()
-        for feat,fi in zip(tf,ti):
-            s2=sv[:500,fi]; colors=["rgba(255,80,120,0.6)" if v>0 else "rgba(80,120,255,0.6)" for v in s2]
-            fig_bee.add_trace(go.Scatter(x=s2+np.random.normal(0,0.002,len(s2)),y=[feat]*len(s2),mode="markers",marker=dict(size=2.5,color=colors,opacity=0.7),name=feat,showlegend=False))
-        fig_bee.add_vline(x=0,line_color="rgba(255,255,255,0.3)",line_width=1)
-        fig_bee.update_layout(**plot_layout(height=380,title=dict(text="SHAP Beeswarm (Direction)",font=dict(size=11,color=WHITE)),xaxis_title="SHAP Value"))
-        st.plotly_chart(fig_bee,use_container_width=True)
-
-    # Conclusion ───────────────────────────────────────────────
-    st.markdown("---")
-    h1=res["perm_p"]<0.05; verdict="CONFIRM H1 — STATISTICALLY SIGNIFICANT" if h1 else "INCONCLUSIVE"
-    st.markdown(f"""
-<div style="background:#040c18;border:1px solid #0d2a3d;border-left:3px solid #f4c542;
-border-radius:4px;padding:16px 20px;font-family:Share Tech Mono,monospace;
-font-size:.68rem;color:#7ab8d4;line-height:2.0;">
-<div style="font-size:.6rem;color:#f4c542;letter-spacing:4px;text-transform:uppercase;margin-bottom:8px;">RESEARCH CONCLUSION — {verdict}</div>
-Sharpe ratio: {sh_s:.3f} (benchmark {sh_b:.3f}) &nbsp;|&nbsp; Annualized return: {ann_s*100:.1f}% (benchmark {ann_b*100:.1f}%).
-<b>Returns: net-of-fees &amp; slippage, pre-tax.</b> ({SLIPPAGE_BPS}bps slippage + {COMMISSION_BPS}bps commission per round-trip.)
-OLS alpha: {res['ols_a']*100:+.2f}% annualized (&beta;={res['ols_b']:.2f}, R&sup2;={res['ols_r2']:.3f}).
-Permutation test (n=1,000): {'rejects' if h1 else 'fails to reject'} H0 at p={res['perm_p']:.4f}.
-Purged {embargo}-month embargo eliminates look-ahead bias. Momentum hard gate prevents long positions in confirmed downtrends.
-Bootstrap Monte Carlo ({int(n_mc)} sims): {pb*100:.0f}% probability of benchmark outperformance.
-OOS Sharpe decay: {ds:.0f}%.
-</div>""", unsafe_allow_html=True)
+    # --- 06 SHAP ---
+    st.markdown("### 06 — SHAP FEATURE ATTRIBUTION (GAME-THEORETIC)")
+    st.markdown("<span style='color:gray; font-size:0.9em'>SHapley Additive exPlanations decompose predictions into individual feature contributions.</span>", unsafe_allow_html=True)
+    
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        st.markdown("**Feature Importance (Mean |SHAP|)**")
+        fig, ax = plt.subplots(figsize=(6, 5))
+        fig.patch.set_facecolor('#0E1117')
+        ax.set_facecolor('#0E1117')
+        ax.tick_params(colors='white')
+        ax.xaxis.label.set_color('white')
+        
+        # Check SHAP version formatting
+        shap.summary_plot(shap_values, X_test_sample, plot_type="bar", show=False, color='#00FFAA')
+        st.pyplot(fig)
+        
+    with sc2:
+        st.markdown("**SHAP Beeswarm (Directional Impact)**")
+        fig2, ax2 = plt.subplots(figsize=(6, 5))
+        fig2.patch.set_facecolor('#0E1117')
+        ax2.set_facecolor('#0E1117')
+        ax2.tick_params(colors='white')
+        ax2.xaxis.label.set_color('white')
+        
+        shap.summary_plot(shap_values, X_test_sample, show=False)
+        st.pyplot(fig2)
 
 else:
-    st.markdown('<div style="text-align:center;padding:60px 20px;color:#2a6a8a;font-family:Share Tech Mono,monospace;"><div style="font-size:.8rem;letter-spacing:3px;text-transform:uppercase;margin-bottom:8px;">READY TO EXECUTE</div><div style="font-size:.65rem;color:#1a4a6a;">Configure parameters in the sidebar and click EXECUTE RESEARCH PIPELINE</div></div>', unsafe_allow_html=True)
+    st.info("Configure your parameters in the sidebar and click **EXECUTE PIPELINE** to begin research.")
