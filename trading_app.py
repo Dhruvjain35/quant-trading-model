@@ -1,6 +1,6 @@
 """
 ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v8.3
-THE MASTER BUILD - ENHANCED WITH T20 FEATURES
+THE MASTER BUILD - ENHANCED WITH T20 FEATURES & EQUITY SCALING
 """
 
 import streamlit as st
@@ -112,24 +112,68 @@ def train_ensemble(data, features, embargo):
     
     return test, rf, train, test
 
-def backtest(data, cost_bps, slip_bps):
+# --- NEW: DYNAMIC BACKTEST ENGINE ---
+def backtest(data, cost_bps, slip_bps, mdd_limit):
     df = data.copy()
-    df['R_ret'] = df['Risk'].pct_change()
-    df['S_ret'] = df['Safe'].pct_change()
-    df['Cash_ret'] = (df['Yield'] / 100) / 252 
-    df['Pos'] = df['Signal'].shift(1).fillna(1)
+    df['R_ret'] = df['Risk'].pct_change().fillna(0)
+    df['S_ret'] = df['Safe'].pct_change().fillna(0)
+    df['Cash_ret'] = ((df['Yield'] / 100) / 252).fillna(0)
+    
+    df['Signal_Shift'] = df['Signal'].shift(1).fillna(1)
     df['Yield_Trend_Shift'] = df['Yield_Trend'].shift(1).fillna(False)
     
-    df['Gross'] = np.where(df['Pos']==1, df['R_ret'], 
-                  np.where(df['Yield_Trend_Shift'], df['Cash_ret'], df['S_ret']))
-    df['Turn'] = df['Pos'].diff().abs()
-    df['Cost'] = df['Turn'] * (cost_bps + slip_bps) / 10000
-    df['Net'] = df['Gross'] - df['Cost']
+    # Pre-calculate alternative return (Safe vs Cash) based on Yield Trend
+    df['Alt_Ret'] = np.where(df['Yield_Trend_Shift'], df['Cash_ret'], df['S_ret'])
     
-    df['Eq_Strat'] = (1 + df['Net'].fillna(0)).cumprod()
-    df['Eq_Risk'] = (1 + df['R_ret'].fillna(0)).cumprod()
+    r_rets = df['R_ret'].values
+    alt_rets = df['Alt_Ret'].values
+    signals = df['Signal_Shift'].values
+    
+    n = len(df)
+    net_rets = np.zeros(n)
+    eq_curve = np.ones(n)
+    weights = np.zeros(n)
+    
+    hwm = 1.0
+    mdd_decimal = mdd_limit / 100.0
+    buffer = 0.05 # Start scaling at 5% drawdown
+    
+    for i in range(1, n):
+        # Calculate current DD from Peak
+        current_dd = (eq_curve[i-1] / hwm) - 1
+        
+        # EQUITY SCALER (Parachute)
+        if current_dd < -buffer:
+            scale_factor = max(0.0, 1.0 - (abs(current_dd) - buffer) / (mdd_decimal - buffer))
+        else:
+            scale_factor = 1.0
+            
+        # Final Applied Weight (Continuous between 0.0 and 1.0)
+        w = signals[i] * scale_factor
+        weights[i] = w
+        
+        # Gross Return (Proportional blend of Risk Asset and Safe/Cash Asset)
+        gross = (w * r_rets[i]) + ((1.0 - w) * alt_rets[i])
+        
+        # Friction
+        turnover = abs(weights[i] - weights[i-1])
+        cost = turnover * (cost_bps + slip_bps) / 10000.0
+        
+        # Net Return & Equity update
+        net_rets[i] = gross - cost
+        eq_curve[i] = eq_curve[i-1] * (1 + net_rets[i])
+        
+        # Update HWM
+        if eq_curve[i] > hwm:
+            hwm = eq_curve[i]
+            
+    df['Pos'] = weights # Replaces binary Pos with scaled weight for Permutation test
+    df['Net'] = net_rets
+    df['Eq_Strat'] = eq_curve
+    df['Eq_Risk'] = (1 + df['R_ret']).cumprod()
     df['DD_Strat'] = df['Eq_Strat'] / df['Eq_Strat'].cummax() - 1
     df['DD_Risk'] = df['Eq_Risk'] / df['Eq_Risk'].cummax() - 1
+    
     return df
 
 def stats(rets):
@@ -152,18 +196,22 @@ safe = st.sidebar.text_input("Risk-Free Asset", "VUSTX")
 embargo = st.sidebar.slider("Purged Embargo (Months)", 0, 12, 4)
 mc = st.sidebar.number_input("Monte Carlo Sims", 100, 2000, 500, 100)
 st.sidebar.markdown("---")
+# --- NEW: DYNAMIC RISK UI ---
+st.sidebar.markdown("**Dynamic Risk Engine**")
+mdd_limit = st.sidebar.slider("Max Drawdown Limit (%)", 15, 50, 25)
+st.sidebar.markdown("---")
 st.sidebar.markdown("**Friction Simulation**")
 tc = st.sidebar.slider("Transaction Cost (bps)", 0, 20, 3)
 slip = st.sidebar.slider("Slippage (BPS per trade)", 0, 50, 5)
 st.sidebar.markdown("---")
-st.sidebar.caption("T20-Enhanced • Regime Detection • Cost Sensitivity • OOS Consistency")
+st.sidebar.caption("T20-Enhanced • Dynamic Equity Scaling • Cost Sensitivity • OOS Consistency")
 run = st.sidebar.button("⚡ EXECUTE RESEARCH PIPELINE", use_container_width=True)
 
 # HOMESCREEN
 if not run:
     st.markdown("QUANTITATIVE RESEARCH LAB")
     st.markdown("<h1>Adaptive Macro-Conditional Ensemble</h1>", unsafe_allow_html=True)
-    st.caption("AMCE FRAMEWORK • REGIME FILTERED • ENSEMBLE VOTING • STATISTICAL VALIDATION")
+    st.caption("AMCE FRAMEWORK • REGIME FILTERED • DYNAMIC SCALING • STATISTICAL VALIDATION")
     
     st.markdown("""
     <div style="background:rgba(124,77,255,0.1);padding:20px;border-radius:4px;border:1px solid rgba(124,77,255,0.2);margin-top:20px;">
@@ -180,7 +228,7 @@ with st.status("Booting AMCE V8.3 Enhanced...", expanded=True) as status:
     raw = load_data(risk, safe)
     data, feats = engineer_features(raw)
     test_data, rf_model, train_df, test_df = train_ensemble(data, feats, embargo)
-    res = backtest(test_data, tc, slip)
+    res = backtest(test_data, tc, slip, mdd_limit)
     status.update(label="✅ Complete!", state="complete", expanded=False)
 
 # STATS
@@ -315,14 +363,14 @@ if c_data:
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
 
-# NEW: TRANSACTION COST SENSITIVITY
+# TRANSACTION COST SENSITIVITY
 st.markdown("<h2>04A — TRANSACTION COST SENSITIVITY ANALYSIS</h2>", unsafe_allow_html=True)
 st.caption("Testing strategy robustness across different friction levels")
 
 cost_levels = [0, 3, 5, 8, 10, 15]
 cost_results = []
 for cost in cost_levels:
-    res_temp = backtest(test_data, cost, slip)
+    res_temp = backtest(test_data, cost, slip, mdd_limit)
     sh_temp, _, tot_temp, ann_temp, dd_temp = stats(res_temp['Net'])
     cost_results.append([f"{cost+slip}bps", f"{sh_temp:.3f}", f"{tot_temp*100:.0f}%", f"{ann_temp*100:.1f}%", f"{dd_temp*100:.1f}%"])
 
@@ -339,7 +387,7 @@ for _, row in cost_df.iterrows():
 html_cost += "</table>"
 st.markdown(html_cost, unsafe_allow_html=True)
 
-# NEW: OUT-OF-SAMPLE CONSISTENCY
+# OUT-OF-SAMPLE CONSISTENCY
 st.markdown("<h2>04B — OUT-OF-SAMPLE CONSISTENCY CHECK</h2>", unsafe_allow_html=True)
 st.caption("Performance across three equal sub-periods of the test set")
 
@@ -371,7 +419,7 @@ oos_c3.markdown(f"""<div style='background:var(--panel);padding:15px;border-left
 <div style='font-size:0.7rem;color:#8B95A8;'>Return: {tot3*100:.0f}% | DD: {dd3*100:.1f}%</div>
 </div>""", unsafe_allow_html=True)
 
-# NEW: DRAWDOWN DURATION ANALYSIS
+# DRAWDOWN DURATION ANALYSIS
 st.markdown("<h2>04C — DRAWDOWN DURATION ANALYSIS</h2>", unsafe_allow_html=True)
 st.caption("Recovery characteristics and time spent underwater")
 
@@ -478,18 +526,19 @@ st.markdown(f"""<div style='display:flex;gap:20px;margin-bottom:20px;'>
 <div data-testid='stMetric' style='flex:1;'><div style='font-size:0.7rem;color:#8B95A8;'>SHARPE RATIO</div><div style='color:var(--accent);font-size:1.8rem;'>{sh_s:.3f}</div><div style='font-size:0.6rem;color:#8B95A8;'>Out-of-sample</div></div>
 </div>""", unsafe_allow_html=True)
 
-# PERMUTATION TEST
+# --- NEW: SCALED PERMUTATION TEST ---
 st.markdown("<h2>07 — STATISTICAL SIGNIFICANCE (PERMUTATION TEST)</h2>", unsafe_allow_html=True)
 n_perm = 1000
-pos = res['Pos'].values
+pos = res['Pos'].values # Now a continuous float between 0 and 1
 br = res['R_ret'].values
-sr = res['S_ret'].values
+ar = res['Alt_Ret'].values # Matches your Yield_Trend conditional logic
 
 perm_sh = []
 np.random.seed(42)
 for _ in range(n_perm):
-    shuf = np.random.permutation(pos)
-    pr = np.where(shuf==1, br, sr)
+    shuf_pos = np.random.permutation(pos)
+    # Proportionally blend the returns based on the shuffled weights
+    pr = (shuf_pos * br) + ((1.0 - shuf_pos) * ar)
     p_sh, _, _, _, _ = stats(pd.Series(pr))
     perm_sh.append(p_sh)
 
