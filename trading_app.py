@@ -67,10 +67,12 @@ def engineer_features(df):
     data['Vol_Ratio'] = data['Risk_Vol'] / data['Safe_Vol']
     data['Vol_Ratio_MA'] = data['Vol_Ratio'].rolling(63).mean()
     
+  
+    data = data.replace([np.inf, -np.inf], np.nan)
     
-    data.replace([np.inf, -np.inf], np.nan, inplace=True)
+    data = data.dropna()
     
-    data.dropna(inplace=True)
+    
     features = ['Mom_1M', 'Mom_3M', 'MA_200_Dist', 'Yield_Mom', 'Vol_Ratio', 'RSI_14']
     return data, features
 
