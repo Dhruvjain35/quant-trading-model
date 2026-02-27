@@ -62,7 +62,7 @@ def engineer_features(df):
     rs = gain / loss
     data['RSI_14'] = 100 - (100 / (1 + rs))
     
- data['Risk_Vol'] = data['Risk'].pct_change().rolling(21).std()
+    data['Risk_Vol'] = data['Risk'].pct_change().rolling(21).std()
     data['Safe_Vol'] = data['Safe'].pct_change().rolling(21).std()
     data['Vol_Ratio'] = data['Risk_Vol'] / data['Safe_Vol']
     data['Vol_Ratio_MA'] = data['Vol_Ratio'].rolling(63).mean()
