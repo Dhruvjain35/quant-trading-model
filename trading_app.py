@@ -1,6 +1,6 @@
 """
 ADAPTIVE MACRO-CONDITIONAL ENSEMBLE (AMCE) v8.3
-THE MASTER BUILD - ENHANCED WITH T20 FEATURES
+
 """
 
 import streamlit as st
@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="AMCE Terminal", page_icon="▲", layout="wide", initial_sidebar_state="expanded")
 
-# EXACT CSS
+# Home UI
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;600;700&family=Inter:wght@400;600&display=swap');
