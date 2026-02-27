@@ -1,88 +1,25 @@
-# Multi-Asset Tactical Allocation Model
+# Adaptive Macro-Regime Trading Engine (V8.3)
 
-An ML-powered trading strategy that dynamically switches between stocks (SPY), bonds (TLT), and cash based on market conditions.
+A quantitative trading backtester that shifts market exposure based on macroeconomic regimes. Built to prioritize out-of-sample robustness and absolute returns by avoiding common retail pitfalls like overfitting and cash drag.
 
-![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+## The V8.3 Architecture
+Earlier versions of this model attempted to dynamically scale out of positions during drawdowns. While that capped max losses, empirical testing showed it created massive cash drag during V-shaped market recoveries. V8.3 reverts to a strict binary (1 or 0) risk-on/risk-off allocation. It’s a simpler, more aggressive approach that captures momentum significantly better while still defending capital during structural breakdowns.
 
-##  Overview
+## Core Methodology
+* **Macro Regime Shifting:** Uses a state-space model to toggle exposure based on macroeconomic indicators.
+* **Anti-Overfitting:** Implements Purged Embargo walk-forward validation to prevent data leakage between training and testing sets.
+* **Statistical Rigor:** Uses Permutation Testing to generate a p-value for the Sharpe ratio, proving the performance isn't just random luck.
+* **Interpretable AI:** Integrates SHAP (SHapley Additive exPlanations) to visualize exactly which macro variables drive the model's decisions—no black boxes.
+* **Real-World Friction:** Explicitly accounts for dynamic transaction costs and bid-ask slippage to ensure out-of-sample realism.
 
-This quantitative trading model uses ensemble machine learning to predict whether stocks or bonds will outperform in the next month. It combines three algorithms:
-- **Logistic Regression** - Linear baseline
-- **Random Forest** - Captures non-linear patterns  
-- **Gradient Boosting** - Sequential learning
+## Tech Stack
+* **Core:** `pandas`, `numpy`, `scipy`
+* **ML:** `scikit-learn`, `xgboost`, `shap`
+* **UI:** `streamlit`, `plotly`
 
-##  Features
+## Quick Start
 
-- **22 Market Indicators**: Momentum, volatility, trend, and correlation features
-- **Walk-Forward Validation**: Proper out-of-sample testing (no lookahead bias)
-- **Transaction Costs**: Realistic backtesting with 5 bps trading costs
-- **Interactive Dashboard**: Beautiful Streamlit web app
-- **Professional Visualizations**: Equity curves, drawdowns, heatmaps
-
-##  Performance
-
-- **Backtest Period**: 2013-2025 (131 months)
-- **Strategy**: Dynamic allocation between SPY/TLT/CASH
-- **Mean AUC**: ~0.49
-- **Sharpe Ratio**: 0.17 (strategy) vs 1.02 (SPY)
-- **Max Drawdown**: -20.6% (strategy) vs -23.9% (SPY)
-
-##  Installation
-```bash
-# Clone the repository
-git clone https://github.com/Inkspire-Custom-Arts/quant-trading-model.git
-cd quant-trading-model
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-##  Usage
-
-### Option 1: Terminal Version (CLI)
-```bash
-python3 lesson1_spy_returns.py
-```
-
-### Option 2: Web App (Interactive Dashboard)
-```bash
-streamlit run trading_app.py
-```
-Opens at `http://localhost:8501` with interactive charts!
-
-##  What You Get
-
-1. **Equity Curve** - Growth of $1 over time
-2. **Drawdown Chart** - Risk visualization
-3. **Monthly Returns Heatmap** - Calendar view
-4. **Regime Allocation** - Strategy decisions over time
-5. **Model AUC** - Prediction quality
-6. **Annual Returns** - Year-by-year comparison
-
-##  How It Works
-
-1. **Data Collection**: Downloads historical prices (SPY, QQQ, IWM, TLT, GLD)
-2. **Feature Engineering**: Creates 22 technical indicators
-3. **Model Training**: Walk-forward validation (no lookahead!)
-4. **Signal Generation**: Ensemble prediction → regime decision
-5. **Backtesting**: Realistic simulation with transaction costs
-
-## Disclaimer
-
-**This project is for educational purposes only.**
-- Not financial advice
-- Past performance ≠ future results
-- Trading involves risk of loss
-
-## License
-
-MIT License
-
----
-
-**Built with Python, scikit-learn, and Streamlit** 
+1. Clone the repo and navigate to the directory:
+   ```bash
+   git clone [https://github.com/yourusername/macro-regime-engine.git](https://github.com/yourusername/macro-regime-engine.git)
+   cd macro-regime-engine
