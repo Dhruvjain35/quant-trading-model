@@ -23,3 +23,5 @@ Earlier versions of this model attempted to dynamically scale out of positions d
    ```bash
    git clone [https://github.com/yourusername/macro-regime-engine.git](https://github.com/yourusername/macro-regime-engine.git)
    cd macro-regime-engine
+pip install -r requirements.txt
+streamlit run app.py
